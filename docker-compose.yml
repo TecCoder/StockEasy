@@ -1,0 +1,28 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: sqlite:////workspace/data/stockeasy.db
+    volumes:
+      - stockeasy-data:/workspace/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      backend:
+        condition: service_healthy
+volumes:
+  stockeasy-data:

@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stockeasy"
+version = "0.1.0.dev0"
+description = "Local-first investment research and portfolio ledger"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115,<1", "uvicorn>=0.34,<1", "sqlalchemy>=2.0.40,<3",
+  "alembic>=1.15,<2", "pydantic-settings>=2.8,<3", "httpx>=0.28,<1",
+  "argon2-cffi>=23.1,<26", "pycountry>=24.6,<27",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "pytest-cov>=6,<8", "ruff>=0.11,<1", "mypy>=1.15,<2"]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501", "B008"]
+
+[tool.mypy]
+python_version = "3.12"
+check_untyped_defs = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+exclude = ["tests", "alembic"]

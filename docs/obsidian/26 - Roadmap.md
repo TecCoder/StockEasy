@@ -8,7 +8,7 @@ tags: [roadmap]
 ## Fases
 
 - [x] 0 — Arquitectura, ERD, proveedores, ADRs, riesgos y estructura.
-- [ ] 1 — Foundation: FastAPI, React, SQLite, Alembic, sesión local, settings, Docker, tests.
+- [ ] 1 — Foundation: implementación nativa verificada (4 tests backend, 1 frontend, lint, tipos, build y upgrade/downgrade Alembic); Docker preparado, ejecución pendiente de daemon.
 - [ ] 2 — Assets & Market Data: contratos, fuentes, caché, cuotas, watchlists, gráficos.
 - [ ] 3 — Technical Analysis: SMA, EMA, RSI, MACD, Bollinger, volumen.
 - [ ] 4 — Fundamentals: SEC, períodos, revisiones, métricas e históricos.
