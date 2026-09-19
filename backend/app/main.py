@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from app.api import auth
+from app.api import auth, market
 from app.api import settings as settings_api
 from app.core.config import settings
 
@@ -63,6 +63,7 @@ def create_app() -> FastAPI:
         return {"status": "ok", "app": "StockEasy"}
 
     app.include_router(auth.router, prefix="/api")
+    app.include_router(market.router, prefix="/api")
     app.include_router(settings_api.router, prefix="/api")
     return app
 
