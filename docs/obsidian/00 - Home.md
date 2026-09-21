@@ -13,6 +13,7 @@ Aplicación local de seguimiento y análisis de acciones, ETFs, fondos y criptoa
 - [[02 - Architecture]]
 - [[04 - Database Model]]
 - [[06 - Market Data Providers]]
+- [[07 - SEC EDGAR]]
 - [[26 - Roadmap]]
 - [[29 - ADR Index]]
 - [[Risks]]

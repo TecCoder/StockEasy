@@ -13,7 +13,7 @@ tags: [configuration]
 | ALLOWED_ORIGINS | Lista separada por comas, sin barra final |
 | COOKIE_SECURE | false para localhost HTTP; true con HTTPS |
 | SESSION_HOURS | Caducidad absoluta de sesión |
-| ALPHA_VANTAGE_API_KEY / FMP_API_KEY / COINGECKO_API_KEY | Sólo backend |
+| ALPHA_VANTAGE_API_KEY / FMP_API_KEY / EODHD_API_KEY / COINGECKO_API_KEY | Sólo backend |
 | SEC_USER_AGENT | Aplicación, nombre y contacto real, obligatorio para SEC |
 | QUOTE_TTL / HISTORY_TTL / FUNDAMENTAL_TTL / PROFILE_TTL / FX_TTL | Segundos |
 

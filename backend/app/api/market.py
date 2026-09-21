@@ -62,7 +62,9 @@ def history(asset_id: str, user: CurrentUser, db: DB, refresh: bool = False) -> 
 
 @router.post("/assets/{asset_id}/prices")
 def add_manual_price(asset_id: str, body: ManualPrice, user: CurrentUser, db: DB) -> dict[str, Any]:
-    return manual_price(db, own_asset(db, user.id, asset_id), body.date, body.close)
+    return manual_price(
+        db, own_asset(db, user.id, asset_id), body.date, body.close, body.valuation_basis
+    )
 
 
 def own_watchlist(db: DB, user: CurrentUser, watchlist_id: str) -> Watchlist:
@@ -142,6 +144,7 @@ def provider_status(user: CurrentUser, db: DB) -> list[dict[str, Any]]:
     configured = {
         "alpha_vantage": bool(settings.alpha_vantage_api_key),
         "fmp": bool(settings.fmp_api_key),
+        "eodhd": bool(settings.eodhd_api_key),
         "coingecko": bool(settings.coingecko_api_key),
         "sec": bool(settings.sec_user_agent),
         "frankfurter": True,

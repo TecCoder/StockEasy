@@ -10,6 +10,14 @@ Python 3.12+, FastAPI, SQLAlchemy 2, Alembic, Pydantic, httpx, Argon2id. React, 
 
 ## Inicio local en Windows
 
+Después de instalar y crear el usuario, también puedes abrir **StockEasy** desde el acceso directo del escritorio. Este inicia backend y frontend, abre el navegador y mantiene ambos procesos vinculados. El botón **Salir** de la barra lateral cierra la sesión, detiene el backend y hace que el lanzador termine el frontend.
+
+Para volver a crear el acceso directo manualmente:
+
+```powershell
+.\scripts\install-shortcut.ps1
+```
+
 Python 3.12+ y Node 22+ deben estar en PATH. Desde esta carpeta:
 
 ```powershell
@@ -41,7 +49,7 @@ Abre http://127.0.0.1:8080. SQLite persiste en el volumen `stockeasy-data`. **No
 
 ## Configuración
 
-`.env.example` contiene las variables disponibles. Claves opcionales: `ALPHA_VANTAGE_API_KEY`, `FMP_API_KEY`, `COINGECKO_API_KEY`; `SEC_USER_AGENT` debe identificar tu aplicación y contacto. Sin claves, la aplicación conserva funciones locales y muestra datos automáticos como no disponibles. Nunca pongas claves en variables `VITE_*`.
+`.env.example` contiene las variables disponibles. Claves opcionales: `ALPHA_VANTAGE_API_KEY`, `FMP_API_KEY`, `EODHD_API_KEY`, `COINGECKO_API_KEY`; `SEC_USER_AGENT` debe identificar tu aplicación y contacto. EODHD aporta búsqueda por ticker/ISIN y NAV histórico para fondos. Sin claves, la aplicación conserva funciones locales y muestra datos automáticos como no disponibles. Nunca pongas claves en variables `VITE_*`.
 
 `DATABASE_URL` configura el almacenamiento. Los TTL, orígenes permitidos, duración de sesiones y Secure de cookies son configurables. El uso local HTTP requiere `COOKIE_SECURE=false`; cualquier futura instalación HTTPS debe activarlo.
 

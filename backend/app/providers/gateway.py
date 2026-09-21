@@ -19,6 +19,7 @@ from app.providers.base import ProviderError, ProviderResult
 LIMITS = {
     "alpha_vantage": (5, 25, 750),
     "fmp": (20, 250, 7500),
+    "eodhd": (10, 20, 600),
     "coingecko": (30, 300, 9000),
     "sec": (60, 5000, 100000),
     "frankfurter": (30, 5000, 100000),
@@ -85,7 +86,9 @@ class Gateway:
         refresh: bool = False,
     ) -> ProviderResult:
         params = params or {}
-        safe = {k: v for k, v in params.items() if k not in {"apikey", "api_key"}}
+        safe = {
+            k: v for k, v in params.items() if k not in {"apikey", "api_key", "api_token", "token"}
+        }
         key = hashlib.sha256(json.dumps([provider, url, safe], sort_keys=True).encode()).hexdigest()
         cached = self.db.get(ApiCache, key)
         now = utcnow()
@@ -136,11 +139,13 @@ class Gateway:
                             seconds = 60
                     usage.retry_after = utcnow() + timedelta(seconds=seconds)
                     raise ProviderError(f"{provider}: límite de peticiones del proveedor")
-                if response.status_code in {401, 402, 403}:
+                if response.status_code == 401:
                     usage.retry_after = utcnow() + timedelta(minutes=15)
-                    raise ProviderError(
-                        f"{provider}: clave inválida o datos no incluidos en el plan"
-                    )
+                    raise ProviderError(f"{provider}: clave inválida")
+                if response.status_code in {402, 403}:
+                    # A plan restriction may apply to one endpoint or symbol only.
+                    # Do not block every request to the provider for fifteen minutes.
+                    raise ProviderError(f"{provider}: datos no incluidos en el plan")
                 if response.status_code >= 500:
                     raise httpx.ConnectError("Upstream unavailable")
                 if response.status_code != 200:

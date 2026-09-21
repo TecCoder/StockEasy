@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from app.api import auth, market
+from app.api import auth, fundamentals, market, portfolio
 from app.api import settings as settings_api
 from app.core.config import settings
 
@@ -17,13 +17,16 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 logger = logging.getLogger("stockeasy")
 
 
-def create_app() -> FastAPI:
+def create_app(shutdown_callback: Callable[[], None] | None = None) -> FastAPI:
     app = FastAPI(
         title="StockEasy",
         version="0.1.0-dev",
         docs_url="/api/docs",
         openapi_url="/api/openapi.json",
     )
+    # The desktop launcher injects this callback. Regular ASGI deployments keep
+    # running when a user logs out.
+    app.state.shutdown_callback = shutdown_callback
     app.add_middleware(
         TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1", "testserver", "backend"]
     )
@@ -64,6 +67,8 @@ def create_app() -> FastAPI:
 
     app.include_router(auth.router, prefix="/api")
     app.include_router(market.router, prefix="/api")
+    app.include_router(fundamentals.router, prefix="/api")
+    app.include_router(portfolio.router, prefix="/api")
     app.include_router(settings_api.router, prefix="/api")
     return app
 

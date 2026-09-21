@@ -49,6 +49,7 @@ class AssetPrice(Base):
     volume: Mapped[Decimal | None] = mapped_column(ExactDecimal)
     provider: Mapped[str] = mapped_column(String(32))
     adjustment: Mapped[str] = mapped_column(String(24), default="raw")
+    valuation_basis: Mapped[str | None] = mapped_column(String(64))
     retrieved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

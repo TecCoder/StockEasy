@@ -1,5 +1,8 @@
+from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from app.db.session import get_db
+from app.main import create_app
 from app.models import User
 
 
@@ -39,6 +42,24 @@ def test_password_change_revokes_sessions(auth):
         == 200
     )
     assert auth.get("/api/auth/me").status_code == 401
+
+
+def test_logout_and_shutdown_uses_desktop_callback(db):
+    shutdown_requests = []
+    app = create_app(shutdown_callback=lambda: shutdown_requests.append(True))
+    app.dependency_overrides[get_db] = lambda: db
+
+    with TestClient(app) as client:
+        login = client.post(
+            "/api/auth/login",
+            json={"username": "alice", "password": "a secure test password"},
+        )
+        client.headers["X-CSRF-Token"] = login.json()["csrf_token"]
+        response = client.post("/api/auth/logout-and-shutdown")
+
+        assert response.json() == {"ok": True, "shutdown": True}
+        assert shutdown_requests == [True]
+        assert client.get("/api/auth/me").status_code == 401
 
 
 def test_login_errors_and_origin(client):

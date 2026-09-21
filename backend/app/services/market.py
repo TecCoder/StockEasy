@@ -11,7 +11,8 @@ from app.db.base import utcnow
 from app.models import Asset, AssetPrice, ProviderMapping
 from app.providers.base import MarketDataProvider, ProviderError, ProviderResult
 from app.providers.gateway import Gateway
-from app.providers.market import FMP, AlphaVantage, CoinGecko
+from app.providers.market import EODHD, FMP, AlphaVantage, CoinGecko
+from app.providers.sec import SEC
 from app.schemas.market import AssetCreate, AssetOut
 
 
@@ -46,6 +47,17 @@ def import_asset(db: Session, user_id: str, body: AssetCreate) -> Asset:
                 provider_asset_id=body.provider_asset_id or body.symbol,
             )
         )
+        # SEC supplies the authoritative CIK and fundamentals, while FMP supplies
+        # market prices. Keep both mappings when a US company is imported from EDGAR.
+        if body.provider == "sec" and body.asset_type == "STOCK":
+            db.merge(
+                ProviderMapping(
+                    asset_id=asset.id,
+                    provider="fmp",
+                    provider_symbol=body.symbol,
+                    provider_asset_id=body.symbol,
+                )
+            )
     db.commit()
     return asset
 
@@ -54,10 +66,11 @@ class MarketService:
     def __init__(self, db: Session, providers: list[MarketDataProvider] | None = None) -> None:
         self.db = db
         gateway = Gateway(db)
+        self.sec = SEC(gateway)
         self.providers: list[MarketDataProvider] = (
             providers
             if providers is not None
-            else [AlphaVantage(gateway), FMP(gateway), CoinGecko(gateway)]
+            else [AlphaVantage(gateway), FMP(gateway), EODHD(gateway), CoinGecko(gateway)]
         )
 
     def search(self, user_id: str, query: str, asset_type: str | None = None) -> dict[str, Any]:
@@ -75,10 +88,26 @@ class MarketService:
             if not asset_type or a.asset_type == asset_type
         ]
         errors = []
+        if asset_type in {None, "STOCK"}:
+            try:
+                response = self.sec.search_companies(query)
+                results.extend(response.data)
+                if response.warning:
+                    errors.append(response.warning)
+            except (ProviderError, KeyError, ValueError, TypeError) as exc:
+                errors.append(
+                    str(exc) if isinstance(exc, ProviderError) else "sec: formato no reconocido"
+                )
         for provider in self.providers:
             if asset_type == "CRYPTO" and provider.name != "coingecko":
                 continue
-            if asset_type and asset_type != "CRYPTO" and provider.name == "coingecko":
+            if asset_type != "CRYPTO" and provider.name == "coingecko":
+                continue
+            if provider.name == "eodhd" and asset_type not in {"ETF", "MUTUAL_FUND"}:
+                continue
+            if asset_type == "MUTUAL_FUND" and provider.name != "eodhd":
+                continue
+            if asset_type == "STOCK" and provider.name == "eodhd":
                 continue
             try:
                 response = provider.search_assets(query)
@@ -107,7 +136,7 @@ class MarketService:
             mapping = mappings[provider.name]
             symbol = (
                 mapping.provider_asset_id
-                if asset.asset_type == "CRYPTO"
+                if asset.asset_type == "CRYPTO" or provider.name == "eodhd"
                 else mapping.provider_symbol
             )
             try:
@@ -225,7 +254,9 @@ def price_dict(row: AssetPrice) -> dict[str, Any]:
     }
 
 
-def manual_price(db: Session, asset: Asset, day: date, close: Decimal) -> dict[str, Any]:
+def manual_price(
+    db: Session, asset: Asset, day: date, close: Decimal, valuation_basis: str | None = None
+) -> dict[str, Any]:
     row = db.scalar(
         select(AssetPrice).where(
             AssetPrice.asset_id == asset.id, AssetPrice.date == day, AssetPrice.provider == "manual"
@@ -243,5 +274,6 @@ def manual_price(db: Session, asset: Asset, day: date, close: Decimal) -> dict[s
         db.add(row)
     else:
         row.close, row.retrieved_at = close, utcnow().astimezone(UTC)
+    row.valuation_basis = valuation_basis or None
     db.commit()
     return price_dict(row)

@@ -14,7 +14,7 @@ switch ($Task) {
         Set-Location frontend
         Invoke-Checked { npm.cmd ci }
     }
-    'backend' { Set-Location backend; Invoke-Checked { & $python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --no-access-log } }
+    'backend' { Set-Location backend; Invoke-Checked { & $python -m app.desktop } }
     'frontend' { Set-Location frontend; Invoke-Checked { npm.cmd run dev } }
     'migrate' { New-Item -ItemType Directory -Force -Path data | Out-Null; Set-Location backend; Invoke-Checked { & $python -m alembic upgrade head } }
     'seed' { Set-Location backend; Invoke-Checked { & $python -m app.cli create-user --username (Read-Host 'Username') } }

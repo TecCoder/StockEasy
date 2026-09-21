@@ -1,3 +1,4 @@
+from app.models.fundamental import FundamentalFact
 from app.models.identity import LoginAttempt, LoginSession, Preference, User
 from app.models.market import (
     ApiCache,
@@ -8,8 +9,13 @@ from app.models.market import (
     Watchlist,
     WatchlistAsset,
 )
+from app.models.portfolio import FXRate, Portfolio, Transaction
 
 __all__ = [
+    "FundamentalFact",
+    "FXRate",
+    "Portfolio",
+    "Transaction",
     "LoginAttempt",
     "LoginSession",
     "Preference",

@@ -1,0 +1,165 @@
+from datetime import date
+from decimal import Decimal as D
+from types import SimpleNamespace
+
+import pytest
+
+from app.analytics.returns import twr, xirr
+from app.models.portfolio import FXRate
+from app.portfolio.engine import reconstruct
+from app.services.fx import FXService
+
+
+def entry(kind, quantity=1, price=0, fees=0, taxes=0, asset="a", currency="EUR", fx="1"):
+    return SimpleNamespace(
+        transaction_type=kind,
+        quantity=D(str(quantity)),
+        price=D(str(price)),
+        fees=D(str(fees)),
+        taxes=D(str(taxes)),
+        asset_id=asset,
+        currency=currency,
+        fx_rate=D(fx),
+        date=date(2024, 1, 1),
+    )
+
+
+def test_weighted_average_realized_dividends_and_split():
+    ledger = reconstruct(
+        [
+            entry("DEPOSIT", price=5000, asset=None),
+            entry("BUY", 10, 100, 10),
+            entry("BUY", 10, 200),
+            entry("SELL", 5, 250, 5),
+            entry("DIVIDEND", price=30, taxes=6),
+            entry("SPLIT", 2),
+        ]
+    )
+    p = ledger.positions["a"]
+    assert p.quantity == 30
+    assert p.cost == D("2257.5")
+    assert p.cost / p.quantity == D("75.25")
+    assert p.realized == D("492.5")
+    assert p.dividends == 24
+    assert ledger.cash["EUR"] == 3259
+    with pytest.raises(ValueError):
+        reconstruct([entry("BUY", 1, 10), entry("SELL", 2, 10)])
+
+
+def test_xirr_twr_and_invalid_flows():
+    assert xirr([(date(2023, 1, 1), D(-1000)), (date(2024, 1, 1), D(1100))]) == pytest.approx(0.1)
+    assert xirr([(date(2023, 1, 1), D(100))]) is None
+    assert (
+        xirr([(date(2023, 1, 1), D(-100)), (date(2024, 1, 1), D(200)), (date(2025, 1, 1), D(-50))])
+        is None
+    )
+    assert twr([(D(100), D(160), D(50)), (D(160), D(176), D(0))]) == D(".21")
+
+
+def test_fx_no_parity_and_no_lookahead(db):
+    from sqlalchemy import select
+
+    from app.models import User
+
+    user = db.scalar(select(User).where(User.username == "alice"))
+    service = FXService(db)
+    assert service.get(user.id, "EUR", "EUR", date(2024, 1, 1)) == 1
+    assert service.get(user.id, "USD", "EUR", date(2024, 1, 1)) is None
+    db.add(
+        FXRate(
+            user_id=user.id,
+            base="USD",
+            quote="EUR",
+            date=date(2024, 1, 2),
+            rate=D(".9"),
+            provider="manual",
+        )
+    )
+    db.commit()
+    assert service.get(user.id, "USD", "EUR", date(2024, 1, 1)) is None
+    assert service.get(user.id, "USD", "EUR", date(2024, 1, 3)) == D(".9")
+    assert service.get(user.id, "EUR", "USD", date(2024, 1, 3)) == D(1) / D(".9")
+
+
+def test_portfolio_api_edit_delete_validation_and_ownership(auth):
+    asset = auth.post(
+        "/api/assets",
+        json={"symbol": "FUND", "name": "Fund", "currency": "EUR", "asset_type": "MUTUAL_FUND"},
+    ).json()
+    p = auth.post("/api/portfolios", json={"name": "Core"}).json()
+    path = f"/api/portfolios/{p['id']}"
+    base = {
+        "date": "2024-01-01",
+        "currency": "EUR",
+        "price": "100",
+        "quantity": "10",
+        "asset_id": asset["id"],
+        "transaction_type": "BUY",
+    }
+    auth.post(
+        path + "/transactions",
+        json={
+            "date": "2024-01-01",
+            "transaction_type": "DEPOSIT",
+            "currency": "EUR",
+            "price": "2000",
+        },
+    )
+    buy = auth.post(path + "/transactions", json=base)
+    assert buy.status_code == 200
+    assert (
+        auth.post(
+            path + "/transactions", json={**base, "transaction_type": "SELL", "quantity": "20"}
+        ).status_code
+        == 422
+    )
+    sell = auth.post(
+        path + "/transactions",
+        json={
+            **base,
+            "date": "2024-01-02",
+            "transaction_type": "SELL",
+            "quantity": "5",
+            "price": "150",
+        },
+    )
+    assert sell.status_code == 200
+    assert auth.delete(path + "/transactions/" + buy.json()["id"]).status_code == 422
+    assert (
+        auth.put(
+            path + "/transactions/" + buy.json()["id"], json={**base, "quantity": "2"}
+        ).status_code
+        == 422
+    )
+    today = date.today().isoformat()
+    auth.post(f"/api/assets/{asset['id']}/prices", json={"date": today, "close": "160"})
+    snap = auth.get(path + "/positions").json()
+    assert D(str(snap["total_value"])) == 2550
+    assert D(str(snap["total_pl"])) == 550
+    assert D(str(snap["positions"][0]["unrealized_pl"])) == 300
+    assert D(str(snap["realized_pl"])) == 250
+    assert "transaction_type" in auth.get(path + "/export").text
+    r = auth.post(
+        "/api/auth/login", json={"username": "bob", "password": "another secure password"}
+    )
+    auth.headers["X-CSRF-Token"] = r.json()["csrf_token"]
+    assert auth.get(path + "/transactions").status_code == 404
+    assert auth.get(path + "/export").status_code == 404
+
+
+def test_csv_preview_does_not_write_and_import_rolls_back(auth):
+    p = auth.post("/api/portfolios", json={"name": "Import"}).json()
+    path = f"/api/portfolios/{p['id']}"
+    content = (
+        "date,ticker,transaction_type,quantity,price,currency\n2024-01-01,,DEPOSIT,1,1000,EUR\n"
+    )
+    preview = auth.post(path + "/import", json={"content": content}).json()
+    assert preview["valid"] and not auth.get(path + "/transactions").json()
+    assert (
+        auth.post(path + "/import", json={"content": content, "confirm": True}).json()["imported"]
+        == 1
+    )
+    assert (
+        auth.post(path + "/import", json={"content": content, "confirm": True}).status_code == 422
+    )
+    assert len(auth.get(path + "/transactions").json()) == 1

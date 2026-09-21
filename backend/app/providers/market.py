@@ -1,6 +1,7 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
+from urllib.parse import quote
 
 from app.core.config import settings
 from app.providers.base import PriceBar, ProviderError, ProviderResult
@@ -151,6 +152,101 @@ class FMP:
 
     def get_company_profile(self, symbol: str) -> ProviderResult:
         return self.request("profile", settings.profile_ttl, symbol=symbol)
+
+
+class EODHD:
+    name = "eodhd"
+
+    def __init__(self, gateway: Gateway) -> None:
+        self.gateway = gateway
+
+    def request(self, path: str, ttl: int, refresh: bool = False, **params: Any) -> ProviderResult:
+        if not settings.eodhd_api_key:
+            raise ProviderError("EODHD: falta API key")
+        return self.gateway.get(
+            self.name,
+            f"https://eodhd.com/api/{path}",
+            {"api_token": settings.eodhd_api_key, "fmt": "json", **params},
+            ttl=ttl,
+            refresh=refresh,
+        )
+
+    def search_assets(self, query: str) -> ProviderResult:
+        r = self.request(
+            f"search/{quote(query, safe='')}",
+            settings.profile_ttl,
+            type="fund",
+            limit=20,
+        )
+        r.data = [
+            {
+                "symbol": x["Code"],
+                "name": x["Name"],
+                "asset_type": "ETF" if str(x.get("Type", "")).upper() == "ETF" else "MUTUAL_FUND",
+                "exchange": x.get("Exchange") or "UNKNOWN",
+                "currency": (x.get("Currency") or "EUR").upper(),
+                "provider": self.name,
+                "provider_asset_id": f"{x['Code']}.{x['Exchange']}",
+            }
+            for x in r.data
+            if x.get("Code") and x.get("Exchange") and x.get("Name")
+        ]
+        return r
+
+    def get_quote(self, symbol: str, currency: str, refresh: bool = False) -> ProviderResult:
+        start = date.today() - timedelta(days=14)
+        r = self.request(
+            f"eod/{quote(symbol, safe='.-')}",
+            settings.quote_ttl,
+            refresh,
+            **{"from": start.isoformat(), "to": date.today().isoformat(), "order": "d"},
+        )
+        if not isinstance(r.data, list) or not r.data:
+            raise ProviderError("EODHD: NAV no disponible")
+        latest = r.data[0]
+        previous = r.data[1] if len(r.data) > 1 else None
+        current = Decimal(str(latest["adjusted_close"] or latest["close"]))
+        prior = Decimal(str(previous["adjusted_close"] or previous["close"])) if previous else None
+        change = ((current / prior) - 1) * 100 if prior else None
+        r.data = {
+            "price": str(current),
+            "currency": currency,
+            "date": latest["date"],
+            "change_percent": str(change) if change is not None else None,
+        }
+        return r
+
+    def get_historical_prices(
+        self, symbol: str, currency: str, refresh: bool = False
+    ) -> ProviderResult:
+        start = date.today() - timedelta(days=366)
+        r = self.request(
+            f"eod/{quote(symbol, safe='.-')}",
+            settings.history_ttl,
+            refresh,
+            **{"from": start.isoformat(), "to": date.today().isoformat(), "order": "a"},
+        )
+        if not isinstance(r.data, list):
+            raise ProviderError("EODHD: histórico de NAV no disponible")
+        r.data = [
+            PriceBar(
+                date=date.fromisoformat(x["date"]),
+                currency=currency,
+                open=Decimal(str(x["open"])) if x.get("open") is not None else None,
+                high=Decimal(str(x["high"])) if x.get("high") is not None else None,
+                low=Decimal(str(x["low"])) if x.get("low") is not None else None,
+                close=Decimal(str(x.get("adjusted_close") or x["close"])),
+                volume=Decimal(str(x["volume"])) if x.get("volume") is not None else None,
+                adjustment="adjusted",
+            )
+            for x in r.data
+        ]
+        if not r.data:
+            raise ProviderError("EODHD: histórico de NAV no disponible")
+        return r
+
+    def get_company_profile(self, symbol: str) -> ProviderResult:
+        return self.request(f"fundamentals/{quote(symbol, safe='.-')}", settings.profile_ttl)
 
 
 class CoinGecko:

@@ -1,7 +1,7 @@
 import secrets
 from datetime import timedelta
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 
@@ -78,6 +78,26 @@ def logout(session: AuthSession, db: DB, response: Response) -> dict[str, bool]:
     db.commit()
     response.delete_cookie("stockeasy_session", path="/")
     return {"ok": True}
+
+
+@router.post("/logout-and-shutdown")
+def logout_and_shutdown(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    session: AuthSession,
+    db: DB,
+    response: Response,
+) -> dict[str, bool]:
+    """End the session and stop a server owned by the desktop launcher."""
+    db.delete(session)
+    db.commit()
+    response.delete_cookie("stockeasy_session", path="/")
+    shutdown_callback = request.app.state.shutdown_callback
+    if shutdown_callback is not None:
+        # Background tasks run after the response has been sent, so the browser
+        # can complete logout before the local server exits.
+        background_tasks.add_task(shutdown_callback)
+    return {"ok": True, "shutdown": shutdown_callback is not None}
 
 
 @router.post("/password")

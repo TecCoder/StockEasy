@@ -5,10 +5,13 @@ import httpx
 import pytest
 from sqlalchemy import select
 
+from app.core.config import settings
 from app.db.base import utcnow
-from app.models import ApiCache, ProviderUsage
+from app.models import ApiCache, ProviderMapping, ProviderUsage
 from app.providers.base import ProviderError
 from app.providers.gateway import Gateway
+from app.providers.market import EODHD
+from app.providers.sec import SEC
 
 
 def test_cache_stale_rate_limit_and_secret_exclusion(db):
@@ -48,6 +51,108 @@ def test_daily_limit_persists(db):
         Gateway(db).reserve("alpha_vantage")
 
 
+def test_plan_restriction_does_not_block_other_fmp_symbols(db):
+    gateway = Gateway(
+        db,
+        httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(403))),
+    )
+
+    with pytest.raises(ProviderError, match="datos no incluidos en el plan"):
+        gateway.get("fmp", "https://example.test/quote", {"symbol": "GOOG"})
+
+    usage = db.get(ProviderUsage, "fmp")
+    assert usage.retry_after is None
+
+
+def test_eodhd_fund_search_quote_and_history(db, monkeypatch):
+    monkeypatch.setattr(settings, "eodhd_api_key", "TEST_EODHD_ONLY")
+
+    def respond(request):
+        assert "TEST_EODHD_ONLY" in str(request.url)
+        if "/search/" in request.url.path:
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "Code": "IE00BDD48S37",
+                        "Exchange": "EUFUND",
+                        "Name": "Vanguard EUR Corporate 1-3 Year",
+                        "Type": "FUND",
+                        "Currency": "EUR",
+                    }
+                ],
+            )
+        order = request.url.params.get("order")
+        rows = [
+            {
+                "date": "2026-09-18",
+                "open": 4.937,
+                "high": 4.937,
+                "low": 4.937,
+                "close": 4.937,
+                "adjusted_close": 4.937,
+                "volume": 0,
+            },
+            {
+                "date": "2026-09-17",
+                "open": 4.9425,
+                "high": 4.9425,
+                "low": 4.9425,
+                "close": 4.9425,
+                "adjusted_close": 4.9425,
+                "volume": 0,
+            },
+        ]
+        return httpx.Response(200, json=rows if order == "d" else list(reversed(rows)))
+
+    provider = EODHD(Gateway(db, httpx.Client(transport=httpx.MockTransport(respond))))
+    search = provider.search_assets("Vanguard")
+    assert search.data[0] == {
+        "symbol": "IE00BDD48S37",
+        "name": "Vanguard EUR Corporate 1-3 Year",
+        "asset_type": "MUTUAL_FUND",
+        "exchange": "EUFUND",
+        "currency": "EUR",
+        "provider": "eodhd",
+        "provider_asset_id": "IE00BDD48S37.EUFUND",
+    }
+    quote = provider.get_quote("IE00BDD48S37.EUFUND", "EUR")
+    assert quote.data["price"] == "4.937"
+    assert Decimal(quote.data["change_percent"]) < 0
+    history = provider.get_historical_prices("IE00BDD48S37.EUFUND", "EUR")
+    assert [bar.date.isoformat() for bar in history.data] == ["2026-09-17", "2026-09-18"]
+    assert all("TEST_EODHD_ONLY" not in row.key for row in db.scalars(select(ApiCache)))
+
+
+def test_sec_company_search_returns_importable_cik(db, monkeypatch):
+    monkeypatch.setattr(settings, "sec_user_agent", "StockEasy Tests tests@example.com")
+    payload = {
+        "fields": ["cik", "name", "ticker", "exchange"],
+        "data": [
+            [320193, "Apple Inc.", "AAPL", "Nasdaq"],
+            [789019, "Microsoft Corp", "MSFT", "Nasdaq"],
+        ],
+    }
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=payload))
+    )
+
+    result = SEC(Gateway(db, client)).search_companies("apple")
+
+    assert result.data == [
+        {
+            "symbol": "AAPL",
+            "name": "Apple Inc.",
+            "asset_type": "STOCK",
+            "exchange": "NASDAQ",
+            "currency": "USD",
+            "provider": "sec",
+            "provider_asset_id": "0000320193",
+            "cik": "0000320193",
+        }
+    ]
+
+
 def test_assets_watchlists_and_private_manual_prices(auth, db):
     data = {"symbol": "test", "name": "Test fund", "currency": "EUR", "asset_type": "MUTUAL_FUND"}
     asset = auth.post("/api/assets", json=data).json()
@@ -75,3 +180,68 @@ def test_assets_watchlists_and_private_manual_prices(auth, db):
     auth.headers["X-CSRF-Token"] = r.json()["csrf_token"]
     assert auth.get(f"/api/assets/{asset['id']}").status_code == 404
     assert auth.get(f"/api/watchlists/{w['id']}/items").status_code == 404
+
+
+def test_import_sec_company_preserves_cik(auth):
+    response = auth.post(
+        "/api/assets",
+        json={
+            "symbol": "AAPL",
+            "name": "Apple Inc.",
+            "currency": "USD",
+            "asset_type": "STOCK",
+            "exchange": "NASDAQ",
+            "provider": "sec",
+            "provider_asset_id": "0000320193",
+            "cik": "0000320193",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["cik"] == "0000320193"
+    asset_id = response.json()["id"]
+    assert auth.get(f"/api/assets/{asset_id}").status_code == 200
+
+
+def test_import_sec_company_also_links_fmp_for_market_prices(auth, db):
+    response = auth.post(
+        "/api/assets",
+        json={
+            "symbol": "AAPL",
+            "name": "Apple Inc.",
+            "currency": "USD",
+            "asset_type": "STOCK",
+            "exchange": "NASDAQ",
+            "provider": "sec",
+            "provider_asset_id": "0000320193",
+            "cik": "0000320193",
+        },
+    )
+
+    mappings = {
+        row.provider: row
+        for row in db.scalars(
+            select(ProviderMapping).where(ProviderMapping.asset_id == response.json()["id"])
+        )
+    }
+    assert mappings["sec"].provider_asset_id == "0000320193"
+    assert mappings["fmp"].provider_symbol == "AAPL"
+
+
+def test_import_eodhd_fund_preserves_full_provider_symbol(auth, db):
+    response = auth.post(
+        "/api/assets",
+        json={
+            "symbol": "IE00BDD48S37",
+            "name": "Vanguard EUR Corporate 1-3 Year",
+            "currency": "EUR",
+            "asset_type": "MUTUAL_FUND",
+            "exchange": "EUFUND",
+            "provider": "eodhd",
+            "provider_asset_id": "IE00BDD48S37.EUFUND",
+        },
+    )
+
+    mapping = db.get(ProviderMapping, (response.json()["id"], "eodhd"))
+    assert mapping.provider_symbol == "IE00BDD48S37"
+    assert mapping.provider_asset_id == "IE00BDD48S37.EUFUND"

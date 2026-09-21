@@ -29,7 +29,7 @@ class AssetCreate(BaseModel):
     asset_type: AssetType = "STOCK"
     exchange: str = Field(default="MANUAL", min_length=1, max_length=64)
     currency: Currency = "EUR"
-    provider: Literal["manual", "alpha_vantage", "fmp", "coingecko"] = "manual"
+    provider: Literal["manual", "alpha_vantage", "fmp", "eodhd", "coingecko", "sec"] = "manual"
     provider_asset_id: str = Field(default="", max_length=128, pattern=r"^[a-zA-Z0-9._:-]*$")
     cik: str | None = Field(default=None, pattern=r"^\d{1,10}$")
 
@@ -59,6 +59,7 @@ class AssetOut(BaseModel):
 class ManualPrice(BaseModel):
     date: DateValue
     close: NonNegativeDecimal
+    valuation_basis: str | None = Field(default=None, max_length=64)
 
     @field_validator("date")
     @classmethod
