@@ -2,7 +2,9 @@ import csv
 import hashlib
 import io
 import json
-from datetime import date, timedelta
+import re
+from datetime import date, datetime, timedelta
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Response
@@ -198,7 +200,36 @@ def export_portfolio(portfolio_id: str, user: CurrentUser, db: DB, format: str =
 
 class CSVImport(BaseModel):
     content: str = Field(max_length=1_000_000)
+    filename: str = Field(default="", max_length=255)
     confirm: bool = False
+
+
+MYINVESTOR_QUANTITY_COLUMN = "N\u00ba de participaciones"
+MYINVESTOR_COLUMNS = {
+    "Fecha de la orden",
+    "ISIN",
+    "Importe estimado",
+    MYINVESTOR_QUANTITY_COLUMN,
+    "Estado",
+}
+
+
+def localized_decimal(value: str) -> Decimal:
+    """Parse the Spanish numeric representation used by MyInvestor exports."""
+    cleaned = re.sub(r"[^0-9,.-]", "", value.strip())
+    if not cleaned:
+        raise ValueError("Importe o cantidad vacío")
+    if "," in cleaned:
+        cleaned = cleaned.replace(".", "").replace(",", ".")
+    try:
+        return Decimal(cleaned)
+    except InvalidOperation:
+        raise ValueError(f"Número no válido: {value}") from None
+
+
+def row_currency(value: str) -> str:
+    match = re.search(r"\b([A-Z]{3})\b", value.upper())
+    return match.group(1) if match else "EUR"
 
 
 @router.post("/portfolios/{portfolio_id}/import")
@@ -206,11 +237,29 @@ def import_csv(portfolio_id: str, body: CSVImport, user: CurrentUser, db: DB) ->
     p = own_portfolio(db, user.id, portfolio_id)
     parsed: list[TransactionInput] = []
     preview = []
-    for i, row in enumerate(csv.DictReader(io.StringIO(body.content.lstrip("\ufeff"))), start=2):
+    content = body.content.lstrip("\ufeff")
+    first_line = content.splitlines()[0] if content.splitlines() else ""
+    delimiter = ";" if ";" in first_line else ","
+    reader = csv.DictReader(io.StringIO(content), delimiter=delimiter)
+    is_myinvestor = MYINVESTOR_COLUMNS.issubset(set(reader.fieldnames or []))
+    for i, row in enumerate(reader, start=2):
         if i > 1002:
             raise HTTPException(422, "Máximo 1000 filas por importación")
         try:
-            symbol = row.get("ticker", "").strip().upper()
+            if is_myinvestor and row.get("Estado", "").strip().casefold() != "finalizada":
+                preview.append(
+                    {
+                        "row": i,
+                        "valid": True,
+                        "skipped": True,
+                        "data": None,
+                        "error": "Orden no finalizada; se omite",
+                    }
+                )
+                continue
+            symbol = (
+                row.get("ISIN", "") if is_myinvestor else row.get("ticker", "")
+            ).strip().upper()
             candidates = (
                 list(
                     db.scalars(
@@ -228,18 +277,52 @@ def import_csv(portfolio_id: str, body: CSVImport, user: CurrentUser, db: DB) ->
                 raise ValueError(
                     "Activo no registrado o ambiguo; añade el activo y especifica exchange"
                 )
-            clean = {k: v for k, v in row.items() if k in TransactionInput.model_fields and v != ""}
+            if is_myinvestor:
+                amount = localized_decimal(row.get("Importe estimado", ""))
+                quantity = localized_decimal(row.get(MYINVESTOR_QUANTITY_COLUMN, ""))
+                if amount <= 0 or quantity <= 0:
+                    raise ValueError("Importe y participaciones deben ser positivos")
+                order_date = datetime.strptime(
+                    row.get("Fecha de la orden", ""), "%d/%m/%Y"
+                ).date()
+                clean: dict[str, Any] = {
+                    "date": order_date,
+                    "transaction_type": "BUY",
+                    "quantity": quantity,
+                    "price": (amount / quantity).quantize(
+                        Decimal("0.000000000001"), rounding=ROUND_HALF_UP
+                    ),
+                    "currency": row_currency(row.get("Importe estimado", "")),
+                    "fees": Decimal(0),
+                    "taxes": Decimal(0),
+                    "broker": "MyInvestor",
+                    "notes": "Importado desde historial de órdenes de MyInvestor",
+                }
+            else:
+                clean = {
+                    k: v
+                    for k, v in row.items()
+                    if k in TransactionInput.model_fields and v != ""
+                }
             clean["asset_id"] = candidates[0].id if candidates else None
             clean["external_id"] = (
-                row.get("external_id")
-                or "csv:" + hashlib.sha256(json.dumps(row, sort_keys=True).encode()).hexdigest()
+                row.get("external_id") if not is_myinvestor else None
+            ) or (
+                ("myinvestor:" if is_myinvestor else "csv:")
+                + hashlib.sha256(
+                    json.dumps(
+                        {"filename": body.filename, "row": i, "data": row},
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ).encode()
+                ).hexdigest()
             )
             item = TransactionInput.model_validate(clean)
             parsed.append(item)
             preview.append({"row": i, "valid": True, "data": item.model_dump(), "error": None})
         except (ValidationError, ValueError) as exc:
             preview.append({"row": i, "valid": False, "error": str(exc)})
-    valid = bool(preview) and all(r["valid"] for r in preview)
+    valid = bool(parsed) and all(r["valid"] for r in preview)
     if body.confirm:
         if not valid:
             raise HTTPException(422, "Corrige los errores de la vista previa")

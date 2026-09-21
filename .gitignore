@@ -23,6 +23,7 @@ backups/
 **/.obsidian/workspace*
 **/.obsidian/cache/
 StockEasy/
+Transacciones/
 .tools/
 test-results/
 playwright-report/

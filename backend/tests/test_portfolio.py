@@ -163,3 +163,35 @@ def test_csv_preview_does_not_write_and_import_rolls_back(auth):
         auth.post(path + "/import", json={"content": content, "confirm": True}).status_code == 422
     )
     assert len(auth.get(path + "/transactions").json()) == 1
+
+
+def test_myinvestor_csv_imports_finalized_orders_and_skips_rejected(auth):
+    asset = auth.post(
+        "/api/assets",
+        json={
+            "symbol": "IE000QAZP7L2",
+            "name": "iShares Emerging Markets Index Fund (IE) S Acc EUR",
+            "currency": "EUR",
+            "asset_type": "MUTUAL_FUND",
+            "exchange": "EUFUND",
+        },
+    ).json()
+    portfolio = auth.post("/api/portfolios", json={"name": "MyInvestor"}).json()
+    path = f"/api/portfolios/{portfolio['id']}"
+    content = (
+        "Fecha de la orden;ISIN;Importe estimado;N\u00ba de participaciones;Estado\n"
+        "02/01/2024;IE000QAZP7L2;1.234,56 EUR;100,5;Finalizada\n"
+        "03/01/2024;IE000QAZP7L2;100,00 EUR;;Rechazada\n"
+    )
+    body = {"content": content, "filename": "ordenes.csv"}
+    preview = auth.post(path + "/import", json=body).json()
+    assert preview["valid"], preview
+    assert preview["rows"][1]["skipped"]
+    result = auth.post(path + "/import", json={**body, "confirm": True}).json()
+    assert result["imported"] == 1
+    transactions = auth.get(path + "/transactions").json()
+    assert len(transactions) == 1
+    assert transactions[0]["asset_id"] == asset["id"]
+    assert transactions[0]["transaction_type"] == "BUY"
+    assert D(transactions[0]["quantity"]) == D("100.5")
+    assert transactions[0]["broker"] == "MyInvestor"
