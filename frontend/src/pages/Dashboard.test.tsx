@@ -46,7 +46,7 @@ test("dashboard loads the created portfolio and its current snapshot", async () 
           twr: null,
           complete: true,
           missing: [],
-      warnings: ["Aportaciones de efectivo no registradas"],
+          warnings: ["Aportaciones de efectivo no registradas"],
         };
     return { ok: true, json: async () => body } as Response;
   });

@@ -15,6 +15,7 @@ from sqlalchemy import select
 from app.auth.security import DB, CurrentUser
 from app.models import Asset
 from app.models.portfolio import FXRate, Portfolio
+from app.schemas.market import currency as currency_code
 from app.schemas.portfolio import FXInput, PortfolioCreate, TransactionInput
 from app.services.fx import FXService
 from app.services.portfolio import (
@@ -77,14 +78,32 @@ def delete_transaction(
 
 
 @router.get("/portfolios/{portfolio_id}/positions")
-def positions(portfolio_id: str, user: CurrentUser, db: DB) -> dict[str, Any]:
-    return snapshot(db, own_portfolio(db, user.id, portfolio_id))
+def positions(
+    portfolio_id: str,
+    user: CurrentUser,
+    db: DB,
+    display_currency: str | None = None,
+) -> dict[str, Any]:
+    try:
+        target = currency_code(display_currency) if display_currency else None
+    except ValueError:
+        raise HTTPException(422, "Moneda de visualización inválida") from None
+    return snapshot(db, own_portfolio(db, user.id, portfolio_id), display_currency=target)
 
 
 @router.get("/portfolios/{portfolio_id}/performance")
-def performance(portfolio_id: str, user: CurrentUser, db: DB) -> dict[str, Any]:
+def performance(
+    portfolio_id: str,
+    user: CurrentUser,
+    db: DB,
+    display_currency: str | None = None,
+) -> dict[str, Any]:
     p = own_portfolio(db, user.id, portfolio_id)
-    return snapshot(db, p)
+    try:
+        target = currency_code(display_currency) if display_currency else None
+    except ValueError:
+        raise HTTPException(422, "Moneda de visualización inválida") from None
+    return snapshot(db, p, display_currency=target)
 
 
 @router.get("/portfolios/{portfolio_id}/charts")
@@ -94,12 +113,23 @@ def charts(
     db: DB,
     days: int = 365,
     asset_ids: list[str] | None = Query(default=None),
+    display_currency: str | None = None,
 ) -> dict[str, Any]:
     if not 1 <= days <= 3653:
         raise HTTPException(422, "Rango de 1 a 3653 días")
     if asset_ids and len(asset_ids) > 100:
         raise HTTPException(422, "Máximo 100 activos")
-    return chart_history(db, own_portfolio(db, user.id, portfolio_id), asset_ids, days)
+    try:
+        target = currency_code(display_currency) if display_currency else None
+    except ValueError:
+        raise HTTPException(422, "Moneda de visualización inválida") from None
+    return chart_history(
+        db,
+        own_portfolio(db, user.id, portfolio_id),
+        asset_ids,
+        days,
+        target,
+    )
 
 
 @router.get("/portfolios/{portfolio_id}/history")
@@ -190,6 +220,7 @@ def export_portfolio(portfolio_id: str, user: CurrentUser, db: DB, format: str =
     out = io.StringIO(newline="")
     columns = [
         "date",
+        "executed_at",
         "ticker",
         "asset_type",
         "exchange",
@@ -200,6 +231,14 @@ def export_portfolio(portfolio_id: str, user: CurrentUser, db: DB, format: str =
         "fees",
         "taxes",
         "fx_rate",
+        "input_currency",
+        "input_price",
+        "input_fees",
+        "input_taxes",
+        "input_to_asset_rate",
+        "conversion_provider",
+        "conversion_effective_at",
+        "conversion_precision",
         "broker",
         "notes",
         "external_id",

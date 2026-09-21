@@ -12,13 +12,14 @@ import {
   number,
 } from "../components/UI";
 import { useResource } from "../hooks/useResource";
-import type { Asset, Price } from "../types";
+import type { Asset, DisplayCurrency, Price } from "../types";
 
 export type PortfolioInfo = { id: string; name: string; base_currency: string };
 export type Transaction = {
   id: string;
   asset_id: string | null;
   date: string;
+  executed_at: string | null;
   transaction_type: string;
   quantity: string;
   price: string;
@@ -26,6 +27,14 @@ export type Transaction = {
   fees: string;
   taxes: string;
   fx_rate: string;
+  input_currency: string | null;
+  input_price: string | null;
+  input_fees: string | null;
+  input_taxes: string | null;
+  input_to_asset_rate: string | null;
+  conversion_provider: string | null;
+  conversion_effective_at: string | null;
+  conversion_precision: string | null;
   broker: string;
   notes: string;
   external_id: string | null;
@@ -131,6 +140,10 @@ export function filterTransactions(
       transaction.broker,
       transaction.notes,
       transaction.external_id,
+      transaction.input_currency,
+      transaction.input_price,
+      transaction.conversion_provider,
+      transaction.conversion_precision,
       asset?.symbol,
       asset?.name,
     ]
@@ -228,6 +241,9 @@ export function TransactionForm({
   onCancel: () => void;
 }) {
   const [kind, setKind] = useState(initial?.transaction_type ?? "BUY");
+  const [selectedAssetId, setSelectedAssetId] = useState(
+    initial?.asset_id ?? assets[0]?.id ?? "",
+  );
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const needsAsset = [
@@ -238,14 +254,31 @@ export function TransactionForm({
     "TRANSFER_IN",
     "TRANSFER_OUT",
   ].includes(kind);
+  const selectedAsset = assets.find((asset) => asset.id === selectedAssetId);
+  const executionDefault = initial?.executed_at
+    ? (() => {
+        const value = new Date(initial.executed_at);
+        value.setMinutes(value.getMinutes() - value.getTimezoneOffset());
+        return value.toISOString().slice(0, 16);
+      })()
+    : initial?.date
+      ? `${initial.date}T12:00`
+      : (() => {
+          const value = new Date();
+          value.setMinutes(value.getMinutes() - value.getTimezoneOffset());
+          return value.toISOString().slice(0, 16);
+        })();
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
     setBusy(true);
     const values = Object.fromEntries(new FormData(event.currentTarget));
+    const localExecution = String(values.executed_at);
     try {
       await onSave({
         ...values,
+        date: localExecution.slice(0, 10),
+        executed_at: new Date(localExecution).toISOString(),
         transaction_type: kind,
         asset_id: needsAsset ? values.asset_id : null,
         fx_rate: values.fx_rate || null,
@@ -261,9 +294,10 @@ export function TransactionForm({
     <section className="panel">
       <h2>{initial ? "Editar transacción" : "Registrar transacción"}</h2>
       <p className="muted">
-        Registra primero las aportaciones. En dividendos y movimientos de
-        efectivo usa cantidad 1 y precio como importe bruto. FX expresa unidades
-        de {currency} por unidad de la moneda original.
+        Introduce precio y cargos en la moneda realmente utilizada. Si difiere
+        de la moneda del activo, se convertirán al tipo histórico de la hora de
+        ejecución; cuando el proveedor horario no esté disponible se utilizará
+        el cambio diario oficial y quedará indicado en la transacción.
       </p>
       <ErrorNotice error={error} />
       <form onSubmit={submit}>
@@ -292,7 +326,8 @@ export function TransactionForm({
               Activo
               <select
                 name="asset_id"
-                defaultValue={initial?.asset_id ?? assets[0]?.id}
+                value={selectedAssetId}
+                onChange={(event) => setSelectedAssetId(event.target.value)}
                 required
               >
                 {assets.map((a) => (
@@ -304,14 +339,12 @@ export function TransactionForm({
             </label>
           )}
           <label>
-            Fecha
+            Fecha y hora de ejecución
             <input
-              type="date"
-              name="date"
-              max={new Date().toISOString().slice(0, 10)}
-              defaultValue={
-                initial?.date ?? new Date().toISOString().slice(0, 10)
-              }
+              type="datetime-local"
+              name="executed_at"
+              max={new Date().toISOString().slice(0, 16)}
+              defaultValue={executionDefault}
               required
             />
           </label>
@@ -333,18 +366,21 @@ export function TransactionForm({
               type="number"
               min="0"
               step="any"
-              defaultValue={initial?.price ?? "0"}
+              defaultValue={initial?.input_price ?? initial?.price ?? "0"}
               required
             />
           </label>
           <label>
-            Moneda original
+            Moneda introducida / de pago
             <input
               name="currency"
               maxLength={3}
-              defaultValue={initial?.currency ?? currency}
+              defaultValue={initial?.input_currency ?? currency}
               required
             />
+            {selectedAsset && (
+              <small>Moneda del activo: {selectedAsset.currency}</small>
+            )}
           </label>
           <label>
             Comisiones
@@ -353,7 +389,7 @@ export function TransactionForm({
               type="number"
               min="0"
               step="any"
-              defaultValue={initial?.fees ?? "0"}
+              defaultValue={initial?.input_fees ?? initial?.fees ?? "0"}
               required
             />
           </label>
@@ -364,12 +400,27 @@ export function TransactionForm({
               type="number"
               min="0"
               step="any"
-              defaultValue={initial?.taxes ?? "0"}
+              defaultValue={initial?.input_taxes ?? initial?.taxes ?? "0"}
               required
             />
           </label>
           <label>
-            FX a {currency} (si difiere)
+            FX moneda introducida → activo (opcional)
+            <input
+              name="input_to_asset_rate"
+              type="number"
+              min="0.000000000001"
+              step="any"
+              defaultValue={
+                initial?.conversion_provider === "manual"
+                  ? (initial.input_to_asset_rate ?? "")
+                  : ""
+              }
+              placeholder="Automático"
+            />
+          </label>
+          <label>
+            FX activo → {currency} (opcional)
             <input
               name="fx_rate"
               type="number"
@@ -407,7 +458,11 @@ export function TransactionForm({
   );
 }
 
-export function Portfolio() {
+export function Portfolio({
+  displayCurrency = "EUR",
+}: {
+  displayCurrency?: DisplayCurrency;
+}) {
   const portfolios = useResource<PortfolioInfo[]>("/portfolios");
   const assets = useResource<Asset[]>("/assets");
   const [selected, setSelected] = useState("");
@@ -416,17 +471,22 @@ export function Portfolio() {
   const current =
     portfolios.data?.find((p) => p.id === selected) ?? portfolios.data?.[0];
   const snapshot = useResource<Snapshot>(
-    current ? `/portfolios/${current.id}/positions` : null,
+    current
+      ? `/portfolios/${current.id}/positions?display_currency=${displayCurrency}`
+      : null,
   );
   const transactions = useResource<Transaction[]>(
     current ? `/portfolios/${current.id}/transactions` : null,
   );
   const chartPath = useMemo(() => {
     if (!current) return null;
-    const params = new URLSearchParams({ days: String(chartDays) });
+    const params = new URLSearchParams({
+      days: String(chartDays),
+      display_currency: displayCurrency,
+    });
     chartAssetIds.forEach((assetId) => params.append("asset_ids", assetId));
     return `/portfolios/${current.id}/charts?${params}`;
-  }, [current, chartAssetIds, chartDays]);
+  }, [current, chartAssetIds, chartDays, displayCurrency]);
   const history = useResource<PortfolioCharts>(chartPath);
   const [newPortfolio, setNewPortfolio] = useState(false);
   const [form, setForm] = useState(false);
@@ -716,7 +776,8 @@ export function Portfolio() {
                         axisLabel={`Valor en ${history.data?.base_currency ?? snapshot.data.base_currency}`}
                         seriesLabel="Valor de posiciones"
                         unit={
-                          history.data?.base_currency ?? snapshot.data.base_currency
+                          history.data?.base_currency ??
+                          snapshot.data.base_currency
                         }
                         valueFormat="compact"
                       />
@@ -729,7 +790,8 @@ export function Portfolio() {
                         axisLabel={`P/L en ${history.data?.base_currency ?? snapshot.data.base_currency}`}
                         seriesLabel="P/L total"
                         unit={
-                          history.data?.base_currency ?? snapshot.data.base_currency
+                          history.data?.base_currency ??
+                          snapshot.data.base_currency
                         }
                         valueFormat="compact"
                       />
@@ -952,6 +1014,7 @@ export function Portfolio() {
                         <th>MONEDA</th>
                         <th>CARGOS</th>
                         <th>BROKER</th>
+                        <th>CONVERSIÓN</th>
                         <th>NOTAS</th>
                         <th />
                       </tr>
@@ -977,6 +1040,20 @@ export function Portfolio() {
                             )}
                           </td>
                           <td>{t.broker || "—"}</td>
+                          <td>
+                            {t.input_currency &&
+                            t.input_currency !== t.currency ? (
+                              <>
+                                {t.input_currency} → {t.currency}
+                                <small>
+                                  {t.input_to_asset_rate} ·{" "}
+                                  {t.conversion_precision}
+                                </small>
+                              </>
+                            ) : (
+                              "—"
+                            )}
+                          </td>
                           <td>
                             <span title={t.notes}>{t.notes || "—"}</span>
                           </td>

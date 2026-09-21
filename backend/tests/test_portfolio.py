@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal as D
 from types import SimpleNamespace
 
@@ -230,3 +230,45 @@ def test_portfolio_charts_reconstruct_daily_value_cost_and_pnl(auth):
     assert D(points[sell_day.isoformat()]["pnl"]) == 50
     assert data["selection"][0]["symbol"] == "FUND"
     assert auth.get(path + "/charts?asset_ids=not-owned").status_code == 422
+
+
+def test_transaction_converts_input_currency_and_portfolio_displays_usd(auth):
+    asset = auth.post(
+        "/api/assets",
+        json={"symbol": "USD-FUND", "name": "USD Fund", "currency": "USD", "asset_type": "ETF"},
+    ).json()
+    portfolio = auth.post("/api/portfolios", json={"name": "Multi currency"}).json()
+    path = f"/api/portfolios/{portfolio['id']}"
+    executed = datetime.now(UTC) - timedelta(minutes=1)
+    response = auth.post(
+        path + "/transactions",
+        json={
+            "asset_id": asset["id"],
+            "date": executed.date().isoformat(),
+            "executed_at": executed.isoformat(),
+            "transaction_type": "BUY",
+            "quantity": "1",
+            "price": "50",
+            "currency": "EUR",
+            "input_to_asset_rate": "2",
+        },
+    )
+    assert response.status_code == 200, response.text
+    transaction = response.json()
+    assert transaction["currency"] == "USD"
+    assert transaction["input_currency"] == "EUR"
+    assert D(transaction["input_price"]) == 50
+    assert D(transaction["price"]) == 100
+    assert D(transaction["input_to_asset_rate"]) == 2
+    assert transaction["conversion_provider"] == "manual"
+
+    today = date.today().isoformat()
+    auth.post(f"/api/assets/{asset['id']}/prices", json={"date": today, "close": "110"})
+    auth.post("/api/fx", json={"base": "USD", "quote": "EUR", "date": today, "rate": ".5"})
+    eur = auth.get(path + "/positions?display_currency=EUR").json()
+    usd = auth.get(path + "/positions?display_currency=USD").json()
+    assert D(eur["positions_value"]) == 55
+    assert D(eur["cost_basis"]) == 50
+    assert D(usd["positions_value"]) == 110
+    assert D(usd["cost_basis"]) == 100
+    assert D(usd["positions_pnl"]) == 10

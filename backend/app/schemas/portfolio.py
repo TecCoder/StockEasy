@@ -1,4 +1,5 @@
 from datetime import date as DateValue
+from datetime import datetime
 from decimal import Decimal
 from typing import Literal
 
@@ -29,6 +30,7 @@ class PortfolioCreate(BaseModel):
 class TransactionInput(BaseModel):
     asset_id: str | None = None
     date: DateValue
+    executed_at: datetime | None = None
     transaction_type: TransactionType
     quantity: PositiveDecimal = Decimal(1)
     price: NonNegativeDecimal = Decimal(0)
@@ -36,6 +38,7 @@ class TransactionInput(BaseModel):
     fees: NonNegativeDecimal = Decimal(0)
     taxes: NonNegativeDecimal = Decimal(0)
     fx_rate: PositiveDecimal | None = None
+    input_to_asset_rate: PositiveDecimal | None = None
     broker: str = Field(default="", max_length=128)
     notes: str = Field(default="", max_length=4000)
     external_id: str | None = Field(default=None, max_length=128)
@@ -49,6 +52,12 @@ class TransactionInput(BaseModel):
 
     @model_validator(mode="after")
     def validate_type(self) -> "TransactionInput":
+        if self.executed_at:
+            now = datetime.now(self.executed_at.tzinfo)
+            if self.executed_at > now:
+                raise ValueError("No se permiten transacciones futuras")
+            if self.executed_at.date() != self.date:
+                raise ValueError("La fecha debe coincidir con el momento de ejecución")
         kind = self.transaction_type
         if (
             kind in {"BUY", "SELL", "DIVIDEND", "SPLIT", "TRANSFER_IN", "TRANSFER_OUT"}

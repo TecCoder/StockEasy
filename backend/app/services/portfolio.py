@@ -1,6 +1,6 @@
 import threading
-from datetime import date, timedelta
-from decimal import Decimal
+from datetime import UTC, date, datetime, time, timedelta
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 from fastapi import HTTPException
@@ -44,6 +44,7 @@ def transaction_dict(t: Transaction) -> dict[str, Any]:
             "id",
             "asset_id",
             "date",
+            "executed_at",
             "transaction_type",
             "quantity",
             "price",
@@ -51,6 +52,14 @@ def transaction_dict(t: Transaction) -> dict[str, Any]:
             "fees",
             "taxes",
             "fx_rate",
+            "input_currency",
+            "input_price",
+            "input_fees",
+            "input_taxes",
+            "input_to_asset_rate",
+            "conversion_provider",
+            "conversion_effective_at",
+            "conversion_precision",
             "broker",
             "notes",
             "external_id",
@@ -65,16 +74,50 @@ def save_transaction(
     transaction_id: str | None = None,
     commit: bool = True,
 ) -> Transaction:
+    original_currency = body.currency
+    original_price = body.price
+    original_fees = body.fees
+    original_taxes = body.taxes
+    executed_at = body.executed_at or datetime.combine(body.date, time(12), tzinfo=UTC)
+    conversion = None
     if body.asset_id:
         asset = own_asset(db, portfolio.user_id, body.asset_id)
-        if asset.currency != body.currency:
-            raise HTTPException(422, "La moneda debe coincidir con la del activo")
+        conversion = FXService(db).get_at(
+            portfolio.user_id,
+            original_currency,
+            asset.currency,
+            executed_at,
+            body.input_to_asset_rate,
+        )
+        if conversion is None:
+            raise HTTPException(
+                422,
+                f"No hay tipo de cambio {original_currency}/{asset.currency} para la ejecución",
+            )
+        quant = Decimal("0.000000000001")
+        body = body.model_copy(
+            update={
+                "price": (body.price * conversion.rate).quantize(quant, ROUND_HALF_UP),
+                "fees": (body.fees * conversion.rate).quantize(quant, ROUND_HALF_UP),
+                "taxes": (body.taxes * conversion.rate).quantize(quant, ROUND_HALF_UP),
+                "currency": asset.currency,
+                "input_to_asset_rate": conversion.rate,
+            }
+        )
     fx = Decimal(1) if body.currency == portfolio.base_currency else body.fx_rate
     if body.currency == portfolio.base_currency and body.fx_rate not in {None, Decimal(1)}:
         raise HTTPException(422, "Misma moneda requiere FX=1")
     if fx is None:
-        # A network fetch would commit quota/cache changes; resolve FX before the ledger transaction.
-        fx = FXService(db).get(portfolio.user_id, body.currency, portfolio.base_currency, body.date)
+        if conversion and original_currency == portfolio.base_currency:
+            fx = Decimal(1) / conversion.rate
+        else:
+            portfolio_conversion = FXService(db).get_at(
+                portfolio.user_id,
+                body.currency,
+                portfolio.base_currency,
+                executed_at,
+            )
+            fx = portfolio_conversion.rate if portfolio_conversion else None
     if fx is None:
         raise HTTPException(
             422,
@@ -84,7 +127,19 @@ def save_transaction(
         row = db.get(Transaction, transaction_id) if transaction_id else None
         if transaction_id and (row is None or row.portfolio_id != portfolio.id):
             raise HTTPException(404, "Transacción no encontrada")
-        values = {**body.model_dump(), "fx_rate": fx}
+        values = {
+            **body.model_dump(),
+            "executed_at": body.executed_at,
+            "fx_rate": fx,
+            "input_currency": original_currency,
+            "input_price": original_price,
+            "input_fees": original_fees,
+            "input_taxes": original_taxes,
+            "input_to_asset_rate": conversion.rate if conversion else Decimal(1),
+            "conversion_provider": conversion.provider if conversion else "identity",
+            "conversion_effective_at": conversion.effective_at if conversion else executed_at,
+            "conversion_precision": conversion.precision if conversion else "exact",
+        }
         if row:
             for key, value in values.items():
                 setattr(row, key, value)
@@ -121,17 +176,32 @@ def remove_transaction(db: Session, portfolio: Portfolio, transaction_id: str) -
 
 
 def snapshot(
-    db: Session, portfolio: Portfolio, on: date | None = None, live: bool = True
+    db: Session,
+    portfolio: Portfolio,
+    on: date | None = None,
+    live: bool = True,
+    display_currency: str | None = None,
 ) -> dict[str, Any]:
     day = on or date.today()
+    target_currency = display_currency or portfolio.base_currency
     tx = entries(db, portfolio.id, day)
     ledger = reconstruct(list(tx))
     fx_service = FXService(db)
+    base_to_target = fx_service.get(
+        portfolio.user_id,
+        portfolio.base_currency,
+        target_currency,
+        day,
+        fetch=live,
+    )
     positions: list[dict[str, Any]] = []
     missing = []
+    if base_to_target is None:
+        missing.append(f"Falta FX {portfolio.base_currency}/{target_currency}")
     security_value = Decimal(0)
     cash_value = Decimal(0)
-    cost_basis = sum((p.cost_base for p in ledger.positions.values()), Decimal(0))
+    cost_basis_base = sum((p.cost_base for p in ledger.positions.values()), Decimal(0))
+    cost_basis = cost_basis_base * base_to_target if base_to_target is not None else Decimal(0)
     for p in ledger.positions.values():
         asset = db.get(Asset, p.asset_id)
         assert asset is not None
@@ -160,7 +230,13 @@ def snapshot(
                         row.date.isoformat(),
                         row.provider,
                     )
-        fx = fx_service.get(portfolio.user_id, asset.currency, portfolio.base_currency, day)
+        fx = fx_service.get(
+            portfolio.user_id,
+            asset.currency,
+            target_currency,
+            day,
+            fetch=live,
+        )
         value = (
             p.quantity * price * fx
             if price is not None and fx is not None
@@ -170,11 +246,14 @@ def snapshot(
         )
         if value is None:
             missing.append(
-                f"{asset.symbol}: falta precio o FX {asset.currency}/{portfolio.base_currency}"
+                f"{asset.symbol}: falta precio o FX {asset.currency}/{target_currency}"
             )
         else:
             security_value += value
-        unrealized = value - p.cost_base if value is not None else None
+        position_cost = p.cost_base * base_to_target if base_to_target is not None else None
+        realized = p.realized_base * base_to_target if base_to_target is not None else None
+        dividends = p.dividends_base * base_to_target if base_to_target is not None else None
+        unrealized = value - position_cost if value is not None and position_cost is not None else None
         positions.append(
             {
                 "asset_id": asset.id,
@@ -189,16 +268,16 @@ def snapshot(
                 "current_price": price,
                 "price_date": price_date,
                 "price_provider": price_provider,
-                "cost_basis": p.cost_base,
+                "cost_basis": position_cost,
                 "current_value": value,
                 "unrealized_pl": unrealized,
                 "unrealized_percent": unrealized / p.cost_base * 100
                 if unrealized is not None and p.cost_base > 0
                 else None,
-                "realized_pl": p.realized_base,
-                "dividends": p.dividends_base,
-                "total_return": unrealized + p.realized_base + p.dividends_base
-                if unrealized is not None
+                "realized_pl": realized,
+                "dividends": dividends,
+                "total_return": unrealized + realized + dividends
+                if unrealized is not None and realized is not None and dividends is not None
                 else None,
             }
         )
@@ -217,16 +296,23 @@ def snapshot(
         else None
     )
     for currency, amount in ledger.cash.items():
-        fx = fx_service.get(portfolio.user_id, currency, portfolio.base_currency, day)
+        fx = fx_service.get(portfolio.user_id, currency, target_currency, day, fetch=live)
         if amount and fx is None:
-            missing.append(f"Efectivo: falta FX {currency}/{portfolio.base_currency}")
+            missing.append(f"Efectivo: falta FX {currency}/{target_currency}")
         elif fx:
             cash_value += amount * fx
     complete = not missing
     total = security_value + cash_value if complete else None
     has_negative_cash = any(v < 0 for v in ledger.cash.values())
     performance_ok = complete and not ledger.transfer_valuation_missing and not has_negative_cash
-    profit = total - ledger.contributions if performance_ok and total is not None else None
+    contributions = (
+        ledger.contributions * base_to_target if base_to_target is not None else None
+    )
+    profit = (
+        total - contributions
+        if performance_ok and total is not None and contributions is not None
+        else None
+    )
     for position in positions:
         position["weight"] = (
             position["current_value"] / security_value * 100
@@ -234,8 +320,13 @@ def snapshot(
             else None
         )
     annualized = (
-        xirr([*ledger.external_flows, (day, total)])
-        if performance_ok and total is not None
+        xirr(
+            [
+                *ledger.external_flows,
+                (day, total / base_to_target),
+            ]
+        )
+        if performance_ok and total is not None and base_to_target is not None
         else None
     )
     dividends_ytd = sum(
@@ -245,10 +336,11 @@ def snapshot(
             if t.transaction_type == "DIVIDEND" and t.date.year == day.year
         ),
         Decimal(0),
-    )
+    ) * (base_to_target or Decimal(0))
     return {
         "date": day,
-        "base_currency": portfolio.base_currency,
+        "base_currency": target_currency,
+        "portfolio_currency": portfolio.base_currency,
         "positions": positions,
         "cash_balances": ledger.cash,
         "cash": cash_value if not any(m.startswith("Efectivo") for m in missing) else None,
@@ -266,7 +358,7 @@ def snapshot(
         "realized_pl": sum((p.realized_base for p in ledger.positions.values()), Decimal(0)),
         "dividends": sum((p.dividends_base for p in ledger.positions.values()), Decimal(0)),
         "dividends_ytd": dividends_ytd,
-        "net_contributions": ledger.contributions,
+        "net_contributions": contributions,
         "xirr": annualized,
         "twr": None,
         "complete": complete,
@@ -292,6 +384,7 @@ def chart_history(
     portfolio: Portfolio,
     asset_ids: list[str] | None = None,
     days: int = 365,
+    display_currency: str | None = None,
 ) -> dict[str, Any]:
     """Daily position value, carrying cost and total P/L without price lookahead."""
     all_transactions = entries(db, portfolio.id)
@@ -304,7 +397,8 @@ def chart_history(
     ]
     if not selected_transactions:
         return {
-            "base_currency": portfolio.base_currency,
+            "base_currency": display_currency or portfolio.base_currency,
+            "portfolio_currency": portfolio.base_currency,
             "selection": [],
             "items": [],
             "missing_days": 0,
@@ -316,8 +410,18 @@ def chart_history(
             select(Asset).where(Asset.user_id == portfolio.user_id, Asset.id.in_(selected_ids))
         )
     }
+    target_currency = display_currency or portfolio.base_currency
     end = date.today()
     start = max(selected_transactions[0].date, end - timedelta(days=days - 1))
+    fx_service = FXService(db)
+    for source_currency in {portfolio.base_currency, *(asset.currency for asset in assets.values())}:
+        fx_service.ensure_history(
+            portfolio.user_id,
+            source_currency,
+            target_currency,
+            start - timedelta(days=7),
+            end,
+        )
     prices: dict[str, list[AssetPrice]] = {asset_id: [] for asset_id in selected_ids}
     for price in db.scalars(
         select(AssetPrice)
@@ -332,7 +436,6 @@ def chart_history(
 
     price_indexes = {asset_id: 0 for asset_id in selected_ids}
     latest_prices: dict[str, AssetPrice] = {}
-    fx_service = FXService(db)
     fx_cache: dict[tuple[str, date], Decimal | None] = {}
     items: list[dict[str, Any]] = []
     missing_days = 0
@@ -346,11 +449,29 @@ def chart_history(
             price_indexes[asset_id] = index
 
         ledger = reconstruct([transaction for transaction in selected_transactions if transaction.date <= day])
-        invested = sum((position.cost_base for position in ledger.positions.values()), Decimal(0))
-        realized = sum((position.realized_base for position in ledger.positions.values()), Decimal(0))
-        dividends = sum((position.dividends_base for position in ledger.positions.values()), Decimal(0))
+        base_fx = fx_service.get(
+            portfolio.user_id,
+            portfolio.base_currency,
+            target_currency,
+            day,
+            fetch=False,
+        )
+        invested_base = sum(
+            (position.cost_base for position in ledger.positions.values()), Decimal(0)
+        )
+        realized_base = sum(
+            (position.realized_base for position in ledger.positions.values()), Decimal(0)
+        )
+        dividends_base = sum(
+            (position.dividends_base for position in ledger.positions.values()), Decimal(0)
+        )
+        invested = invested_base * base_fx if base_fx is not None else None
+        realized = realized_base * base_fx if base_fx is not None else None
+        dividends = dividends_base * base_fx if base_fx is not None else None
         value = Decimal(0)
         missing: list[str] = []
+        if base_fx is None:
+            missing.append(f"Falta FX {portfolio.base_currency}/{target_currency}")
         for position in ledger.positions.values():
             if position.quantity == 0:
                 continue
@@ -364,14 +485,14 @@ def chart_history(
                 fx_cache[fx_key] = fx_service.get(
                     portfolio.user_id,
                     asset.currency,
-                    portfolio.base_currency,
+                    target_currency,
                     day,
                     fetch=False,
                 )
             fx = fx_cache[fx_key]
             if fx is None:
                 missing.append(
-                    f"{asset.symbol}: falta FX {asset.currency}/{portfolio.base_currency}"
+                    f"{asset.symbol}: falta FX {asset.currency}/{target_currency}"
                 )
                 continue
             value += position.quantity * price.close * fx
@@ -384,7 +505,12 @@ def chart_history(
                 "date": day,
                 "invested": invested,
                 "value": value if complete else None,
-                "pnl": value - invested + realized + dividends if complete else None,
+                "pnl": value - invested + realized + dividends
+                if complete
+                and invested is not None
+                and realized is not None
+                and dividends is not None
+                else None,
                 "realized": realized,
                 "dividends": dividends,
                 "complete": complete,
@@ -394,7 +520,8 @@ def chart_history(
         day += timedelta(days=1)
 
     return {
-        "base_currency": portfolio.base_currency,
+        "base_currency": target_currency,
+        "portfolio_currency": portfolio.base_currency,
         "selection": [
             {"asset_id": asset.id, "symbol": asset.symbol, "name": asset.name}
             for asset in sorted(assets.values(), key=lambda item: item.symbol)
