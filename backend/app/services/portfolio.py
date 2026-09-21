@@ -202,6 +202,20 @@ def snapshot(
                 else None,
             }
         )
+    positions_complete = not missing
+    positions_value = security_value if positions_complete else None
+    positions_pnl = (
+        sum(
+            (
+                position["total_return"]
+                for position in positions
+                if position["total_return"] is not None
+            ),
+            Decimal(0),
+        )
+        if positions_complete
+        else None
+    )
     for currency, amount in ledger.cash.items():
         fx = fx_service.get(portfolio.user_id, currency, portfolio.base_currency, day)
         if amount and fx is None:
@@ -215,8 +229,8 @@ def snapshot(
     profit = total - ledger.contributions if performance_ok and total is not None else None
     for position in positions:
         position["weight"] = (
-            position["current_value"] / total * 100
-            if total and total > 0 and position["current_value"] is not None
+            position["current_value"] / security_value * 100
+            if security_value > 0 and position["current_value"] is not None
             else None
         )
     annualized = (
@@ -239,6 +253,11 @@ def snapshot(
         "cash_balances": ledger.cash,
         "cash": cash_value if not any(m.startswith("Efectivo") for m in missing) else None,
         "total_value": total,
+        "positions_value": positions_value,
+        "positions_pnl": positions_pnl,
+        "positions_return_percent": positions_pnl / cost_basis * 100
+        if positions_pnl is not None and cost_basis > 0
+        else None,
         "cost_basis": cost_basis,
         "total_pl": profit,
         "return_percent": profit / ledger.contributions * 100
@@ -254,7 +273,7 @@ def snapshot(
         "missing": missing,
         "warnings": (
             [
-                "Efectivo negativo: registra aportaciones o revisa operaciones; rentabilidad no disponible"
+                "Aportaciones de efectivo no registradas: rentabilidad basada en flujos no disponible"
             ]
             if has_negative_cash
             else []
@@ -265,4 +284,125 @@ def snapshot(
             else []
         )
         + ["TWR no disponible sin valoraciones verificadas en cada frontera de flujo"],
+    }
+
+
+def chart_history(
+    db: Session,
+    portfolio: Portfolio,
+    asset_ids: list[str] | None = None,
+    days: int = 365,
+) -> dict[str, Any]:
+    """Daily position value, carrying cost and total P/L without price lookahead."""
+    all_transactions = entries(db, portfolio.id)
+    position_asset_ids = {transaction.asset_id for transaction in all_transactions if transaction.asset_id}
+    selected_ids = set(asset_ids or position_asset_ids)
+    if asset_ids and not selected_ids.issubset(position_asset_ids):
+        raise HTTPException(422, "Algún activo no pertenece a esta cartera")
+    selected_transactions = [
+        transaction for transaction in all_transactions if transaction.asset_id in selected_ids
+    ]
+    if not selected_transactions:
+        return {
+            "base_currency": portfolio.base_currency,
+            "selection": [],
+            "items": [],
+            "missing_days": 0,
+        }
+
+    assets = {
+        asset.id: asset
+        for asset in db.scalars(
+            select(Asset).where(Asset.user_id == portfolio.user_id, Asset.id.in_(selected_ids))
+        )
+    }
+    end = date.today()
+    start = max(selected_transactions[0].date, end - timedelta(days=days - 1))
+    prices: dict[str, list[AssetPrice]] = {asset_id: [] for asset_id in selected_ids}
+    for price in db.scalars(
+        select(AssetPrice)
+        .where(
+            AssetPrice.asset_id.in_(selected_ids),
+            AssetPrice.date >= start - timedelta(days=7),
+            AssetPrice.date <= end,
+        )
+        .order_by(AssetPrice.asset_id, AssetPrice.date, AssetPrice.retrieved_at)
+    ):
+        prices[price.asset_id].append(price)
+
+    price_indexes = {asset_id: 0 for asset_id in selected_ids}
+    latest_prices: dict[str, AssetPrice] = {}
+    fx_service = FXService(db)
+    fx_cache: dict[tuple[str, date], Decimal | None] = {}
+    items: list[dict[str, Any]] = []
+    missing_days = 0
+    day = start
+    while day <= end:
+        for asset_id, rows in prices.items():
+            index = price_indexes[asset_id]
+            while index < len(rows) and rows[index].date <= day:
+                latest_prices[asset_id] = rows[index]
+                index += 1
+            price_indexes[asset_id] = index
+
+        ledger = reconstruct([transaction for transaction in selected_transactions if transaction.date <= day])
+        invested = sum((position.cost_base for position in ledger.positions.values()), Decimal(0))
+        realized = sum((position.realized_base for position in ledger.positions.values()), Decimal(0))
+        dividends = sum((position.dividends_base for position in ledger.positions.values()), Decimal(0))
+        value = Decimal(0)
+        missing: list[str] = []
+        for position in ledger.positions.values():
+            if position.quantity == 0:
+                continue
+            asset = assets[position.asset_id]
+            price = latest_prices.get(position.asset_id)
+            if price is None or price.date < day - timedelta(days=7):
+                missing.append(f"{asset.symbol}: falta precio")
+                continue
+            fx_key = (asset.currency, day)
+            if fx_key not in fx_cache:
+                fx_cache[fx_key] = fx_service.get(
+                    portfolio.user_id,
+                    asset.currency,
+                    portfolio.base_currency,
+                    day,
+                    fetch=False,
+                )
+            fx = fx_cache[fx_key]
+            if fx is None:
+                missing.append(
+                    f"{asset.symbol}: falta FX {asset.currency}/{portfolio.base_currency}"
+                )
+                continue
+            value += position.quantity * price.close * fx
+
+        complete = not missing
+        if not complete:
+            missing_days += 1
+        items.append(
+            {
+                "date": day,
+                "invested": invested,
+                "value": value if complete else None,
+                "pnl": value - invested + realized + dividends if complete else None,
+                "realized": realized,
+                "dividends": dividends,
+                "complete": complete,
+                "missing": missing,
+            }
+        )
+        day += timedelta(days=1)
+
+    return {
+        "base_currency": portfolio.base_currency,
+        "selection": [
+            {"asset_id": asset.id, "symbol": asset.symbol, "name": asset.name}
+            for asset in sorted(assets.values(), key=lambda item: item.symbol)
+        ],
+        "items": items,
+        "missing_days": missing_days,
+        "method": (
+            "Coste vivo ponderado frente a valor histórico; P/L = valor - coste vivo + "
+            "P/L realizado + dividendos. Último cierre/FX conocido hasta 7 días, nunca futuro."
+        ),
     }

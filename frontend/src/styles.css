@@ -706,6 +706,36 @@ td span[title] {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.portfolio-chart-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 22px;
+  margin-top: 22px;
+}
+.portfolio-chart-grid > div {
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--panel-soft);
+}
+.position-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.position-picker button.selected {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.range-control {
+  min-width: 150px;
+}
+.chart-method {
+  margin: 16px 0 0;
+  font-size: 11px;
+}
 @media (max-width: 1100px) {
   .sidebar {
     width: 195px;
@@ -728,6 +758,9 @@ td span[title] {
   }
   .login-story h1 {
     font-size: 39px;
+  }
+  .portfolio-chart-grid {
+    grid-template-columns: 1fr;
   }
 }
 @media (max-width: 760px) {

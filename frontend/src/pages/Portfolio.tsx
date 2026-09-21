@@ -1,6 +1,7 @@
 import { useMemo, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { api, post, put } from "../api/client";
+import { PriceChart } from "../components/PriceChart";
 import {
   Empty,
   ErrorNotice,
@@ -11,7 +12,7 @@ import {
   number,
 } from "../components/UI";
 import { useResource } from "../hooks/useResource";
-import type { Asset } from "../types";
+import type { Asset, Price } from "../types";
 
 export type PortfolioInfo = { id: string; name: string; base_currency: string };
 export type Transaction = {
@@ -52,6 +53,9 @@ export type Snapshot = {
   base_currency: string;
   positions: Position[];
   total_value: string | null;
+  positions_value: string | null;
+  positions_pnl: string | null;
+  positions_return_percent: string | null;
   cost_basis: string;
   cash: string | null;
   total_pl: string | null;
@@ -65,6 +69,24 @@ export type Snapshot = {
   complete: boolean;
   missing: string[];
   warnings: string[];
+};
+
+export type PortfolioChartPoint = {
+  date: string;
+  invested: string;
+  value: string | null;
+  pnl: string | null;
+  realized: string;
+  dividends: string;
+  complete: boolean;
+  missing: string[];
+};
+export type PortfolioCharts = {
+  base_currency: string;
+  selection: { asset_id: string; symbol: string; name: string }[];
+  items: PortfolioChartPoint[];
+  missing_days: number;
+  method?: string;
 };
 
 export type TransactionFilters = {
@@ -126,16 +148,38 @@ export function filterTransactions(
   });
 }
 
+function chartPrices(
+  items: PortfolioChartPoint[],
+  field: "value" | "pnl",
+): Price[] {
+  return items.flatMap((item) => {
+    const value = item[field];
+    return value == null
+      ? []
+      : [
+          {
+            date: item.date,
+            open: null,
+            high: null,
+            low: null,
+            close: value,
+            volume: null,
+            provider: "portfolio-ledger",
+            retrieved_at: "",
+            adjustment: "ledger",
+          },
+        ];
+  });
+}
+
 export function PortfolioSummary({ data }: { data: Snapshot }) {
   return (
     <>
       <div className="metrics">
         <Metric
-          label="Valor total"
-          value={money(data.total_value, data.base_currency)}
-          hint={
-            data.complete ? "Posiciones + efectivo" : "Valoración incompleta"
-          }
+          label="Valor actual de posiciones"
+          value={money(data.positions_value, data.base_currency)}
+          hint="Suma de todas las posiciones a precio actual"
         />
         <Metric
           label="Coste de posiciones"
@@ -143,15 +187,18 @@ export function PortfolioSummary({ data }: { data: Snapshot }) {
           hint="Coste medio ponderado"
         />
         <Metric
-          label="Pérdidas y ganancias"
-          value={money(data.total_pl, data.base_currency)}
-          hint={
-            data.return_percent != null
-              ? `${number(data.return_percent)}% sobre aportaciones netas`
-              : "Rentabilidad no disponible"
+          label="P/L acumulado"
+          value={money(data.positions_pnl, data.base_currency)}
+          hint="Latente + realizado + dividendos"
+        />
+        <Metric
+          label="Rentabilidad sobre coste"
+          value={
+            data.positions_return_percent == null
+              ? "No disponible"
+              : `${number(data.positions_return_percent)}%`
           }
         />
-        <Metric label="Efectivo" value={money(data.cash, data.base_currency)} />
       </div>
       {data.missing.length > 0 && (
         <div className="notice">
@@ -364,6 +411,8 @@ export function Portfolio() {
   const portfolios = useResource<PortfolioInfo[]>("/portfolios");
   const assets = useResource<Asset[]>("/assets");
   const [selected, setSelected] = useState("");
+  const [chartAssetIds, setChartAssetIds] = useState<string[]>([]);
+  const [chartDays, setChartDays] = useState(365);
   const current =
     portfolios.data?.find((p) => p.id === selected) ?? portfolios.data?.[0];
   const snapshot = useResource<Snapshot>(
@@ -372,6 +421,13 @@ export function Portfolio() {
   const transactions = useResource<Transaction[]>(
     current ? `/portfolios/${current.id}/transactions` : null,
   );
+  const chartPath = useMemo(() => {
+    if (!current) return null;
+    const params = new URLSearchParams({ days: String(chartDays) });
+    chartAssetIds.forEach((assetId) => params.append("asset_ids", assetId));
+    return `/portfolios/${current.id}/charts?${params}`;
+  }, [current, chartAssetIds, chartDays]);
+  const history = useResource<PortfolioCharts>(chartPath);
   const [newPortfolio, setNewPortfolio] = useState(false);
   const [form, setForm] = useState(false);
   const [edit, setEdit] = useState<Transaction | undefined>();
@@ -391,6 +447,23 @@ export function Portfolio() {
       filterTransactions(transactions.data ?? [], assets.data ?? [], filters),
     [transactions.data, assets.data, filters],
   );
+  const valueHistory = useMemo(
+    () => chartPrices(history.data?.items ?? [], "value"),
+    [history.data],
+  );
+  const pnlHistory = useMemo(
+    () => chartPrices(history.data?.items ?? [], "pnl"),
+    [history.data],
+  );
+  const investedHistory = useMemo(
+    () =>
+      (history.data?.items ?? []).flatMap((item) =>
+        item.value == null
+          ? []
+          : [{ time: item.date, value: Number(item.invested) }],
+      ),
+    [history.data],
+  );
   const types = [
     ...new Set((transactions.data ?? []).map((t) => t.transaction_type)),
   ].sort();
@@ -403,6 +476,13 @@ export function Portfolio() {
   function updateFilter(field: keyof TransactionFilters, value: string) {
     setFilters((old) => ({ ...old, [field]: value }));
   }
+  function toggleChartAsset(assetId: string) {
+    setChartAssetIds((selectedAssets) =>
+      selectedAssets.includes(assetId)
+        ? selectedAssets.filter((id) => id !== assetId)
+        : [...selectedAssets, assetId],
+    );
+  }
   async function save(data: Record<string, unknown>) {
     if (!current) return;
     if (edit)
@@ -412,6 +492,7 @@ export function Portfolio() {
     setEdit(undefined);
     transactions.reload();
     snapshot.reload();
+    history.reload();
   }
   async function remove(id: string) {
     if (
@@ -427,6 +508,7 @@ export function Portfolio() {
       });
       transactions.reload();
       snapshot.reload();
+      history.reload();
     } catch (e) {
       setError((e as Error).message);
     }
@@ -443,6 +525,7 @@ export function Portfolio() {
       if (confirm) {
         transactions.reload();
         snapshot.reload();
+        history.reload();
       }
     } catch (e) {
       setError((e as Error).message);
@@ -469,7 +552,11 @@ export function Portfolio() {
       </PageHeader>
       <ErrorNotice
         error={
-          error || portfolios.error || snapshot.error || transactions.error
+          error ||
+          portfolios.error ||
+          snapshot.error ||
+          transactions.error ||
+          history.error
         }
       />
       {(newPortfolio || !portfolios.data?.length) && (
@@ -530,6 +617,7 @@ export function Portfolio() {
               setEdit(undefined);
               setPreview(null);
               setFilters(emptyTransactionFilters);
+              setChartAssetIds([]);
             }}
           >
             {p.name} · {p.base_currency}
@@ -552,6 +640,109 @@ export function Portfolio() {
         snapshot.data && (
           <>
             <PortfolioSummary data={snapshot.data} />
+            <section className="panel portfolio-history">
+              <div className="panel-heading">
+                <div>
+                  <h2>Evolución del portfolio</h2>
+                  <small>
+                    {chartAssetIds.length
+                      ? `${chartAssetIds.length} posiciones seleccionadas`
+                      : "Portfolio global"}
+                  </small>
+                </div>
+                <label className="range-control">
+                  Periodo
+                  <select
+                    value={chartDays}
+                    onChange={(event) =>
+                      setChartDays(Number(event.target.value))
+                    }
+                  >
+                    <option value={90}>3 meses</option>
+                    <option value={365}>1 año</option>
+                    <option value={1095}>3 años</option>
+                    <option value={3653}>10 años</option>
+                  </select>
+                </label>
+              </div>
+              <p className="muted">
+                Elige el conjunto que quieres agregar. Global incluye todas las
+                posiciones con movimientos en la cartera.
+              </p>
+              <div className="position-picker">
+                <button
+                  className={chartAssetIds.length === 0 ? "selected" : ""}
+                  onClick={() => setChartAssetIds([])}
+                >
+                  Global
+                </button>
+                {snapshot.data.positions.map((position) => (
+                  <button
+                    key={position.asset_id}
+                    className={
+                      chartAssetIds.includes(position.asset_id)
+                        ? "selected"
+                        : ""
+                    }
+                    onClick={() => toggleChartAsset(position.asset_id)}
+                  >
+                    {position.symbol}
+                  </button>
+                ))}
+              </div>
+              {history.loading ? (
+                <Loading />
+              ) : valueHistory.length ? (
+                <>
+                  {history.data?.missing_days ? (
+                    <div className="notice">
+                      Se han omitido {history.data.missing_days} días sin precio
+                      histórico o tipo de cambio verificable.
+                    </div>
+                  ) : null}
+                  <div className="portfolio-chart-grid">
+                    <div>
+                      <h3>Aportado frente a valor</h3>
+                      <PriceChart
+                        prices={valueHistory}
+                        overlays={[
+                          {
+                            name: "Invertido",
+                            color: "#8e98aa",
+                            points: investedHistory,
+                          },
+                        ]}
+                        height={320}
+                        axisLabel={`Valor en ${history.data?.base_currency ?? snapshot.data.base_currency}`}
+                        seriesLabel="Valor de posiciones"
+                        unit={
+                          history.data?.base_currency ?? snapshot.data.base_currency
+                        }
+                        valueFormat="compact"
+                      />
+                    </div>
+                    <div>
+                      <h3>P/L agregado diario</h3>
+                      <PriceChart
+                        prices={pnlHistory}
+                        height={320}
+                        axisLabel={`P/L en ${history.data?.base_currency ?? snapshot.data.base_currency}`}
+                        seriesLabel="P/L total"
+                        unit={
+                          history.data?.base_currency ?? snapshot.data.base_currency
+                        }
+                        valueFormat="compact"
+                      />
+                    </div>
+                  </div>
+                  {history.data?.method && (
+                    <p className="muted chart-method">{history.data.method}</p>
+                  )}
+                </>
+              ) : (
+                <Empty title="No hay precios históricos verificables para esta selección" />
+              )}
+            </section>
             <section className="panel">
               <div className="panel-heading">
                 <h2>Posiciones</h2>

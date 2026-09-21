@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal as D
 from types import SimpleNamespace
 
@@ -195,3 +195,38 @@ def test_myinvestor_csv_imports_finalized_orders_and_skips_rejected(auth):
     assert transactions[0]["transaction_type"] == "BUY"
     assert D(transactions[0]["quantity"]) == D("100.5")
     assert transactions[0]["broker"] == "MyInvestor"
+
+
+def test_portfolio_charts_reconstruct_daily_value_cost_and_pnl(auth):
+    asset = auth.post(
+        "/api/assets",
+        json={"symbol": "FUND", "name": "Fund", "currency": "EUR", "asset_type": "MUTUAL_FUND"},
+    ).json()
+    portfolio = auth.post("/api/portfolios", json={"name": "Charts"}).json()
+    path = f"/api/portfolios/{portfolio['id']}"
+    buy_day = date.today() - timedelta(days=2)
+    sell_day = date.today() - timedelta(days=1)
+    base = {"asset_id": asset["id"], "currency": "EUR"}
+    assert auth.post(
+        path + "/transactions",
+        json={**base, "date": buy_day.isoformat(), "transaction_type": "BUY", "quantity": "2", "price": "100"},
+    ).status_code == 200
+    assert auth.post(
+        path + "/transactions",
+        json={**base, "date": sell_day.isoformat(), "transaction_type": "SELL", "quantity": "1", "price": "130"},
+    ).status_code == 200
+    auth.post(f"/api/assets/{asset['id']}/prices", json={"date": buy_day.isoformat(), "close": "110"})
+    auth.post(f"/api/assets/{asset['id']}/prices", json={"date": sell_day.isoformat(), "close": "120"})
+
+    response = auth.get(path + f"/charts?days=5&asset_ids={asset['id']}")
+    assert response.status_code == 200
+    data = response.json()
+    points = {point["date"]: point for point in data["items"]}
+    assert D(points[buy_day.isoformat()]["invested"]) == 200
+    assert D(points[buy_day.isoformat()]["value"]) == 220
+    assert D(points[buy_day.isoformat()]["pnl"]) == 20
+    assert D(points[sell_day.isoformat()]["invested"]) == 100
+    assert D(points[sell_day.isoformat()]["value"]) == 120
+    assert D(points[sell_day.isoformat()]["pnl"]) == 50
+    assert data["selection"][0]["symbol"] == "FUND"
+    assert auth.get(path + "/charts?asset_ids=not-owned").status_code == 422

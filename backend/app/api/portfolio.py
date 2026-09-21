@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Query, Response
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import select
@@ -18,6 +18,7 @@ from app.models.portfolio import FXRate, Portfolio
 from app.schemas.portfolio import FXInput, PortfolioCreate, TransactionInput
 from app.services.fx import FXService
 from app.services.portfolio import (
+    chart_history,
     entries,
     own_portfolio,
     remove_transaction,
@@ -84,6 +85,21 @@ def positions(portfolio_id: str, user: CurrentUser, db: DB) -> dict[str, Any]:
 def performance(portfolio_id: str, user: CurrentUser, db: DB) -> dict[str, Any]:
     p = own_portfolio(db, user.id, portfolio_id)
     return snapshot(db, p)
+
+
+@router.get("/portfolios/{portfolio_id}/charts")
+def charts(
+    portfolio_id: str,
+    user: CurrentUser,
+    db: DB,
+    days: int = 365,
+    asset_ids: list[str] | None = Query(default=None),
+) -> dict[str, Any]:
+    if not 1 <= days <= 3653:
+        raise HTTPException(422, "Rango de 1 a 3653 días")
+    if asset_ids and len(asset_ids) > 100:
+        raise HTTPException(422, "Máximo 100 activos")
+    return chart_history(db, own_portfolio(db, user.id, portfolio_id), asset_ids, days)
 
 
 @router.get("/portfolios/{portfolio_id}/history")
