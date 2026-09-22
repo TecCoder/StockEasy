@@ -345,3 +345,67 @@ class CoinGecko:
 
     def get_company_profile(self, symbol: str) -> ProviderResult:
         return self.get_asset_metadata(symbol)
+
+
+class TwelveData:
+    """Optional free-tier intraday feed for hourly US equity candles."""
+
+    name = "twelve_data"
+
+    def __init__(self, gateway: Gateway) -> None:
+        self.gateway = gateway
+
+    def get_intraday_prices(
+        self,
+        symbol: str,
+        exchange: str,
+        currency: str,
+        interval: str,
+        refresh: bool = False,
+    ) -> ProviderResult:
+        if not settings.twelve_data_api_key:
+            raise ProviderError("Twelve Data: falta API key gratuita")
+        if interval not in {"1h", "4h"}:
+            raise ProviderError("Twelve Data: temporalidad no compatible")
+        response = self.gateway.get(
+            self.name,
+            "https://api.twelvedata.com/time_series",
+            {
+                "apikey": settings.twelve_data_api_key,
+                "symbol": symbol,
+                "exchange": exchange,
+                "interval": interval,
+                "outputsize": 500,
+                "timezone": "UTC",
+                "format": "JSON",
+            },
+            ttl=settings.quote_ttl,
+            refresh=refresh,
+        )
+        if not isinstance(response.data, dict) or response.data.get("status") == "error":
+            raise ProviderError(
+                "Twelve Data: datos intradía no disponibles; comprueba símbolo, plan y cuota"
+            )
+        values = response.data.get("values")
+        if not isinstance(values, list) or not values:
+            raise ProviderError("Twelve Data: histórico intradía no disponible")
+        items = []
+        for value in values:
+            instant = datetime.fromisoformat(value["datetime"]).replace(tzinfo=UTC)
+            items.append(
+                {
+                    "date": instant.date().isoformat(),
+                    "time": int(instant.timestamp()),
+                    "open": str(value["open"]),
+                    "high": str(value["high"]),
+                    "low": str(value["low"]),
+                    "close": str(value["close"]),
+                    "volume": str(value["volume"]) if value.get("volume") is not None else None,
+                    "currency": response.data.get("meta", {}).get("currency", currency),
+                    "provider": self.name,
+                    "adjustment": "intraday_raw",
+                    "retrieved_at": response.retrieved_at.isoformat(),
+                }
+            )
+        response.data = sorted(items, key=lambda item: item["time"])
+        return response

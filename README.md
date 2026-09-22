@@ -49,7 +49,7 @@ Abre http://127.0.0.1:8080. SQLite persiste en el volumen `stockeasy-data`. **No
 
 ## Configuración
 
-`.env.example` contiene las variables disponibles. Claves opcionales: `ALPHA_VANTAGE_API_KEY`, `FMP_API_KEY`, `EODHD_API_KEY`, `COINGECKO_API_KEY`; `SEC_USER_AGENT` debe identificar tu aplicación y contacto. EODHD aporta búsqueda por ticker/ISIN y NAV histórico para fondos. Sin claves, la aplicación conserva funciones locales y muestra datos automáticos como no disponibles. Nunca pongas claves en variables `VITE_*`.
+`.env.example` contiene las variables disponibles. Claves opcionales: `ALPHA_VANTAGE_API_KEY`, `FMP_API_KEY`, `EODHD_API_KEY`, `TWELVE_DATA_API_KEY`, `COINGECKO_API_KEY`; `SEC_USER_AGENT` debe identificar tu aplicación y contacto. EODHD aporta búsqueda por ticker/ISIN y NAV histórico para fondos. Twelve Data aporta velas intradía de 1h y 4h y dispone de un plan Basic gratuito. Sin claves, la aplicación conserva funciones locales y muestra datos automáticos como no disponibles. Nunca pongas claves en variables `VITE_*`.
 
 `DATABASE_URL` configura el almacenamiento. Los TTL, orígenes permitidos, duración de sesiones y Secure de cookies son configurables. El uso local HTTP requiere `COOKIE_SECURE=false`; cualquier futura instalación HTTPS debe activarlo.
 

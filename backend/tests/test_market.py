@@ -10,7 +10,7 @@ from app.db.base import utcnow
 from app.models import ApiCache, ProviderMapping, ProviderUsage
 from app.providers.base import ProviderError
 from app.providers.gateway import Gateway
-from app.providers.market import EODHD
+from app.providers.market import EODHD, TwelveData
 from app.providers.sec import SEC
 
 
@@ -122,6 +122,41 @@ def test_eodhd_fund_search_quote_and_history(db, monkeypatch):
     history = provider.get_historical_prices("IE00BDD48S37.EUFUND", "EUR")
     assert [bar.date.isoformat() for bar in history.data] == ["2026-09-17", "2026-09-18"]
     assert all("TEST_EODHD_ONLY" not in row.key for row in db.scalars(select(ApiCache)))
+
+
+def test_twelve_data_hourly_history_is_normalized_and_secret_is_not_cached(db, monkeypatch):
+    monkeypatch.setattr(settings, "twelve_data_api_key", "TEST_TWELVE_ONLY")
+    payload = {
+        "meta": {"currency": "USD"},
+        "values": [
+            {
+                "datetime": "2026-09-22 15:00:00",
+                "open": "102",
+                "high": "104",
+                "low": "101",
+                "close": "103",
+                "volume": "20",
+            },
+            {
+                "datetime": "2026-09-22 14:00:00",
+                "open": "100",
+                "high": "103",
+                "low": "99",
+                "close": "102",
+                "volume": "10",
+            },
+        ],
+        "status": "ok",
+    }
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+    )
+
+    result = TwelveData(Gateway(db, client)).get_intraday_prices("AAPL", "NASDAQ", "USD", "1h")
+
+    assert [row["close"] for row in result.data] == ["102", "103"]
+    assert result.data[0]["time"] < result.data[1]["time"]
+    assert all("TEST_TWELVE_ONLY" not in row.key for row in db.scalars(select(ApiCache)))
 
 
 def test_sec_company_search_returns_importable_cik(db, monkeypatch):

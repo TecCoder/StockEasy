@@ -291,7 +291,7 @@ def row_currency(value: str) -> str:
 def import_csv(portfolio_id: str, body: CSVImport, user: CurrentUser, db: DB) -> dict[str, Any]:
     p = own_portfolio(db, user.id, portfolio_id)
     parsed: list[TransactionInput] = []
-    preview = []
+    preview: list[dict[str, Any]] = []
     content = body.content.lstrip("\ufeff")
     first_line = content.splitlines()[0] if content.splitlines() else ""
     delimiter = ";" if ";" in first_line else ","

@@ -11,7 +11,7 @@ from app.db.base import utcnow
 from app.models import Asset, AssetPrice, ProviderMapping
 from app.providers.base import MarketDataProvider, ProviderError, ProviderResult
 from app.providers.gateway import Gateway
-from app.providers.market import EODHD, FMP, AlphaVantage, CoinGecko
+from app.providers.market import EODHD, FMP, AlphaVantage, CoinGecko, TwelveData
 from app.providers.sec import SEC
 from app.schemas.market import AssetCreate, AssetOut
 
@@ -72,6 +72,30 @@ class MarketService:
             if providers is not None
             else [AlphaVantage(gateway), FMP(gateway), EODHD(gateway), CoinGecko(gateway)]
         )
+
+    def intraday(self, asset: Asset, interval: str, refresh: bool = False) -> dict[str, Any]:
+        try:
+            response = TwelveData(Gateway(self.db)).get_intraday_prices(
+                asset.symbol, asset.exchange, asset.currency, interval, refresh
+            )
+            items = response.data
+            return {
+                "items": items,
+                "interval": interval,
+                "warning": response.warning,
+                "stale": response.stale,
+                "coverage_start": datetime.fromtimestamp(items[0]["time"], UTC).isoformat(),
+                "coverage_end": datetime.fromtimestamp(items[-1]["time"], UTC).isoformat(),
+            }
+        except ProviderError as exc:
+            return {
+                "items": [],
+                "interval": interval,
+                "warning": str(exc),
+                "stale": True,
+                "coverage_start": None,
+                "coverage_end": None,
+            }
 
     def search(self, user_id: str, query: str, asset_type: str | None = None) -> dict[str, Any]:
         local = self.db.scalars(

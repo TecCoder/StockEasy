@@ -1,7 +1,7 @@
 ---
 title: Market Data Providers
 aliases: [Market Data Providers]
-verified: 2026-09-19
+verified: 2026-09-22
 tags: [providers]
 ---
 
@@ -14,6 +14,7 @@ Verificación documental y de integración: **2026-09-19**. Las cuotas comercial
 | Alpha Vantage | Búsqueda, cotización EOD, histórico OHLCV, perfil | API key backend | 25 solicitudes/día; daily compact 100 observaciones; full y daily adjusted premium |
 | FMP | Alternativa de búsqueda/perfil/EOD | API key backend | Basic anuncia 250/día y EOD; acceso depende del endpoint/símbolo; no asumir cobertura universal |
 | EODHD | Búsqueda de fondos por nombre, ticker o ISIN; NAV EOD e histórico | API token backend | Free: 20 solicitudes/día y último año; consulta sólo al seleccionar Fondos o ETF |
+| Twelve Data | Velas intradía 1h y 4h para acciones | API key backend | Basic gratuito: 8 créditos/minuto y 800/día; cobertura principal de EE. UU. |
 | SEC | Búsqueda de empresas, companyfacts, submissions, identificación CIK | User-Agent con contacto real | Sin cuenta ni API key; máximo publicado 10/s agregado; aplicación limita conservadoramente y cachea |
 | CoinGecko Demo | Búsqueda, cotización y serie de precios crypto | Demo key backend | Ver [[08 - CoinGecko]]; precios muestreados no son OHLC |
 | Frankfurter v2 / ECB | FX diario | Sin API key | Sin cuota diaria publicada, protección antiabuso; caché por fecha |
@@ -37,6 +38,8 @@ Alpha Vantage es el contrato gratuito explícito para OHLC diario corto; FMP es 
 - [FMP EOD](https://site.financialmodelingprep.com/developer/docs/stable/historical-price-eod-full)
 - [EODHD Search API](https://eodhd.com/financial-apis/search-api-for-stocks-etfs-mutual-funds)
 - [EODHD EOD API](https://eodhd.com/financial-apis/api-for-historical-data-and-volumes)
+- [Twelve Data time series](https://twelvedata.com/docs#time-series)
+- [Twelve Data planes](https://twelvedata.com/pricing)
 - [SEC APIs](https://www.sec.gov/search-filings/edgar-application-programming-interfaces)
 - [SEC fair access](https://www.sec.gov/about/developer-resources)
 - [CoinGecko Demo histórico](https://docs.coingecko.com/demo/reference/coins-id-market-chart)

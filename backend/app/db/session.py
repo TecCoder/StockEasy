@@ -15,6 +15,7 @@ engine = create_engine(
     connect_args={"check_same_thread": False, "timeout": 30}
     if settings.database_url.startswith("sqlite")
     else {},
+    pool_pre_ping=not settings.database_url.startswith("sqlite"),
 )
 
 

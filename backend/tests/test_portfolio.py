@@ -272,3 +272,42 @@ def test_transaction_converts_input_currency_and_portfolio_displays_usd(auth):
     assert D(usd["positions_value"]) == 110
     assert D(usd["cost_basis"]) == 100
     assert D(usd["positions_pnl"]) == 10
+
+
+def test_positions_use_cost_basis_when_market_price_is_unavailable(auth):
+    asset = auth.post(
+        "/api/assets",
+        json={"symbol": "NO-QUOTE", "name": "No quote", "currency": "EUR"},
+    ).json()
+    portfolio = auth.post("/api/portfolios", json={"name": "Fallback valuation"}).json()
+    path = f"/api/portfolios/{portfolio['id']}"
+    today = date.today().isoformat()
+    assert auth.post(
+        path + "/transactions",
+        json={
+            "date": today,
+            "transaction_type": "DEPOSIT",
+            "currency": "EUR",
+            "price": "1000",
+        },
+    ).status_code == 200
+    assert auth.post(
+        path + "/transactions",
+        json={
+            "asset_id": asset["id"],
+            "date": today,
+            "transaction_type": "BUY",
+            "quantity": "2",
+            "price": "100",
+            "currency": "EUR",
+        },
+    ).status_code == 200
+
+    snapshot = auth.get(path + "/positions").json()
+    position = snapshot["positions"][0]
+    assert D(snapshot["positions_value"]) == 200
+    assert D(position["current_value"]) == 200
+    assert D(position["unrealized_pl"]) == 0
+    assert position["valuation_method"] == "cost_basis_fallback"
+    assert snapshot["complete"] is True
+    assert any("coste aportado" in warning for warning in snapshot["warnings"])

@@ -502,6 +502,20 @@ td small {
   background: var(--panel-soft);
   border-color: var(--border);
 }
+
+.chart-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px 24px;
+  margin-bottom: 16px;
+}
+
+.chart-controls > div > small {
+  display: block;
+  margin-bottom: 6px;
+}
 .search-box {
   display: flex;
   align-items: center;

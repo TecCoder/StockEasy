@@ -136,8 +136,8 @@ class FXService:
             except (ProviderError, KeyError, ValueError, TypeError):
                 _FMP_INTRADAY_UNAVAILABLE = True
 
-        rate = self.get(user_id, base, quote, executed_at.date(), fetch=True)
-        if rate is None:
+        daily_rate = self.get(user_id, base, quote, executed_at.date(), fetch=True)
+        if daily_rate is None:
             return None
         source = self.db.scalar(
             select(FXRate)
@@ -164,7 +164,7 @@ class FXService:
             )
         effective_date = source.date if source else executed_at.date()
         return FXConversion(
-            rate,
+            daily_rate,
             source.provider if source else "frankfurter_ecb",
             datetime.combine(effective_date, datetime.min.time(), tzinfo=UTC),
             "daily",

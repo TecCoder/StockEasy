@@ -196,6 +196,7 @@ def snapshot(
     )
     positions: list[dict[str, Any]] = []
     missing = []
+    valuation_warnings = []
     if base_to_target is None:
         missing.append(f"Falta FX {portfolio.base_currency}/{target_currency}")
     security_value = Decimal(0)
@@ -237,6 +238,7 @@ def snapshot(
             day,
             fetch=live,
         )
+        position_cost = p.cost_base * base_to_target if base_to_target is not None else None
         value = (
             p.quantity * price * fx
             if price is not None and fx is not None
@@ -244,13 +246,19 @@ def snapshot(
             if p.quantity == 0
             else None
         )
-        if value is None:
+        valuation_method = "market"
+        if value is None and position_cost is not None:
+            value = position_cost
+            valuation_method = "cost_basis_fallback"
+            valuation_warnings.append(
+                f"{asset.symbol}: valor estimado usando el coste aportado por falta de cotización"
+            )
+        elif value is None:
             missing.append(
                 f"{asset.symbol}: falta precio o FX {asset.currency}/{target_currency}"
             )
-        else:
+        if value is not None:
             security_value += value
-        position_cost = p.cost_base * base_to_target if base_to_target is not None else None
         realized = p.realized_base * base_to_target if base_to_target is not None else None
         dividends = p.dividends_base * base_to_target if base_to_target is not None else None
         unrealized = value - position_cost if value is not None and position_cost is not None else None
@@ -268,6 +276,7 @@ def snapshot(
                 "current_price": price,
                 "price_date": price_date,
                 "price_provider": price_provider,
+                "valuation_method": valuation_method,
                 "cost_basis": position_cost,
                 "current_value": value,
                 "unrealized_pl": unrealized,
@@ -375,6 +384,7 @@ def snapshot(
             if ledger.transfer_valuation_missing
             else []
         )
+        + valuation_warnings
         + ["TWR no disponible sin valoraciones verificadas en cada frontera de flujo"],
     }
 
@@ -476,8 +486,8 @@ def chart_history(
             if position.quantity == 0:
                 continue
             asset = assets[position.asset_id]
-            price = latest_prices.get(position.asset_id)
-            if price is None or price.date < day - timedelta(days=7):
+            latest_price = latest_prices.get(position.asset_id)
+            if latest_price is None or latest_price.date < day - timedelta(days=7):
                 missing.append(f"{asset.symbol}: falta precio")
                 continue
             fx_key = (asset.currency, day)
@@ -495,7 +505,7 @@ def chart_history(
                     f"{asset.symbol}: falta FX {asset.currency}/{target_currency}"
                 )
                 continue
-            value += position.quantity * price.close * fx
+            value += position.quantity * latest_price.close * fx
 
         complete = not missing
         if not complete:

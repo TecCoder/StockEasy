@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -17,6 +18,7 @@ class Settings(BaseSettings):
     alpha_vantage_api_key: str = ""
     fmp_api_key: str = ""
     eodhd_api_key: str = ""
+    twelve_data_api_key: str = ""
     coingecko_api_key: str = ""
     sec_user_agent: str = ""
     quote_ttl: int = 900
@@ -24,6 +26,16 @@ class Settings(BaseSettings):
     fundamental_ttl: int = 86400
     profile_ttl: int = 604800
     fx_ttl: int = 86400
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def use_psycopg_driver(cls, value: str) -> str:
+        """Neon exposes a standard Postgres URL; SQLAlchemy needs the v3 driver explicitly."""
+        if value.startswith("postgres://"):
+            return value.replace("postgres://", "postgresql+psycopg://", 1)
+        if value.startswith("postgresql://") and not value.startswith("postgresql+psycopg://"):
+            return value.replace("postgresql://", "postgresql+psycopg://", 1)
+        return value
 
     @property
     def origins(self) -> list[str]:

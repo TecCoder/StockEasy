@@ -1,3 +1,4 @@
+import os
 import secrets
 from datetime import timedelta
 
@@ -59,7 +60,7 @@ def login(body: Credentials, request: Request, response: Response, db: DB) -> di
         "stockeasy_session",
         token,
         httponly=True,
-        secure=settings.cookie_secure,
+        secure=settings.cookie_secure or bool(os.getenv("VERCEL")),
         samesite="strict",
         max_age=settings.session_hours * 3600,
         path="/",

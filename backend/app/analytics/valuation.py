@@ -47,6 +47,38 @@ class EPSObservation:
     basis: str | None = None
 
 
+def discrete_quarterly_eps(observations: list[EPSObservation]) -> list[EPSObservation]:
+    """Keep discrete quarters and derive missing ones from cumulative SEC facts."""
+    result = [o for o in observations if 70 <= (o.end - o.start).days <= 105]
+    cumulative = [o for o in observations if 150 <= (o.end - o.start).days <= 380]
+    for current in cumulative:
+        candidates = [
+            prior
+            for prior in observations
+            if prior.start == current.start
+            and prior.end < current.end
+            and 70 <= (current.end - prior.end).days <= 105
+            and prior.filed <= current.filed
+            and prior.currency == current.currency
+            and prior.basis == current.basis
+        ]
+        if not candidates:
+            continue
+        prior = max(candidates, key=lambda value: (value.end, value.filed, value.accession))
+        result.append(
+            EPSObservation(
+                start=prior.end + timedelta(days=1),
+                end=current.end,
+                filed=max(prior.filed, current.filed),
+                value=current.value - prior.value,
+                accession=f"{current.accession}-{prior.accession}",
+                currency=current.currency,
+                basis=current.basis,
+            )
+        )
+    return result
+
+
 def ttm_eps(
     observations: list[EPSObservation], on: date, currency: str, verified_basis: str | None
 ) -> tuple[Decimal | None, list[EPSObservation]]:

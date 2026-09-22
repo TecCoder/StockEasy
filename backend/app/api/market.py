@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import func, select
@@ -58,6 +58,20 @@ def quote(asset_id: str, user: CurrentUser, db: DB, refresh: bool = False) -> di
 @router.get("/assets/{asset_id}/prices")
 def history(asset_id: str, user: CurrentUser, db: DB, refresh: bool = False) -> dict[str, Any]:
     return MarketService(db).history(own_asset(db, user.id, asset_id), refresh)
+
+
+@router.get("/assets/{asset_id}/intraday")
+def intraday_history(
+    asset_id: str,
+    user: CurrentUser,
+    db: DB,
+    interval: Literal["1h", "4h"] = "1h",
+    refresh: bool = False,
+) -> dict[str, Any]:
+    asset = own_asset(db, user.id, asset_id)
+    if asset.asset_type != "STOCK":
+        raise HTTPException(422, "Las velas intradía están disponibles para acciones")
+    return MarketService(db).intraday(asset, interval, refresh)
 
 
 @router.post("/assets/{asset_id}/prices")
@@ -145,6 +159,7 @@ def provider_status(user: CurrentUser, db: DB) -> list[dict[str, Any]]:
         "alpha_vantage": bool(settings.alpha_vantage_api_key),
         "fmp": bool(settings.fmp_api_key),
         "eodhd": bool(settings.eodhd_api_key),
+        "twelve_data": bool(settings.twelve_data_api_key),
         "coingecko": bool(settings.coingecko_api_key),
         "sec": bool(settings.sec_user_agent),
         "frankfurter": True,
