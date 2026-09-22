@@ -4,6 +4,8 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from app.analytics.valuation import fcf, ratio
@@ -51,6 +53,7 @@ class FundamentalService:
             response = self.provider.get_historical_fundamentals(asset.cik, refresh)
             warning = response.warning
             us = response.data.get("facts", {}).get("us-gaap", {})
+            fact_rows: dict[str, dict[str, Any]] = {}
             for concept, candidates in CONCEPTS.items():
                 for tag in candidates:
                     for unit, entries in us.get(tag, {}).get("units", {}).items():
@@ -74,26 +77,43 @@ class FundamentalService:
                                 entry["accn"],
                             ]
                             key = hashlib.sha256(str(identity).encode()).hexdigest()
-                            self.db.merge(
-                                FundamentalFact(
-                                    id=key,
-                                    asset_id=asset.id,
-                                    concept=concept,
-                                    taxonomy="us-gaap",
-                                    source_concept=tag,
-                                    unit=unit,
-                                    value=Decimal(str(entry["val"])),
-                                    start=date.fromisoformat(entry["start"])
-                                    if entry.get("start")
-                                    else None,
-                                    end=date.fromisoformat(entry["end"]),
-                                    filed=date.fromisoformat(entry["filed"]),
-                                    accession=entry["accn"],
-                                    fiscal_period=entry.get("fp", ""),
-                                    provider="sec",
-                                    retrieved_at=response.retrieved_at,
-                                )
-                            )
+                            fact_rows[key] = {
+                                "id": key,
+                                "asset_id": asset.id,
+                                "concept": concept,
+                                "taxonomy": "us-gaap",
+                                "source_concept": tag,
+                                "unit": unit,
+                                "value": Decimal(str(entry["val"])),
+                                "start": date.fromisoformat(entry["start"])
+                                if entry.get("start")
+                                else None,
+                                "end": date.fromisoformat(entry["end"]),
+                                "filed": date.fromisoformat(entry["filed"]),
+                                "accession": entry["accn"],
+                                "fiscal_period": entry.get("fp", ""),
+                                "provider": "sec",
+                                "retrieved_at": response.retrieved_at,
+                            }
+            rows_to_save = list(fact_rows.values())
+            dialect = self.db.get_bind().dialect.name
+            if dialect in {"postgresql", "sqlite"}:
+                insert = postgresql_insert if dialect == "postgresql" else sqlite_insert
+                for offset in range(0, len(rows_to_save), 50):
+                    statement = insert(FundamentalFact).values(rows_to_save[offset : offset + 50])
+                    update = {
+                        column.name: getattr(statement.excluded, column.name)
+                        for column in FundamentalFact.__table__.columns
+                        if column.name not in {"id", "valuation_basis"}
+                    }
+                    self.db.execute(
+                        statement.on_conflict_do_update(
+                            index_elements=[FundamentalFact.id], set_=update
+                        )
+                    )
+            else:
+                for row in rows_to_save:
+                    self.db.merge(FundamentalFact(**row))
             self.db.commit()
         except (ProviderError, ValueError, KeyError, TypeError) as exc:
             warning = str(exc) if isinstance(exc, ProviderError) else "SEC: formato no reconocido"
