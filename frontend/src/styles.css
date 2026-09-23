@@ -35,7 +35,7 @@
 }
 body {
   margin: 0;
-  min-width: 360px;
+  min-width: 320px;
 }
 button,
 input,
@@ -182,12 +182,12 @@ small,
   color: var(--muted);
   margin: 43px 13px 18px;
 }
-.sidebar nav {
+:is(.sidebar, .mobile-navigation-content) nav {
   display: flex;
   flex-direction: column;
   gap: 7px;
 }
-.sidebar nav a {
+:is(.sidebar, .mobile-navigation-content) nav a {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -196,7 +196,7 @@ small,
   color: var(--muted);
   font-size: 13px;
 }
-.sidebar nav a.active {
+:is(.sidebar, .mobile-navigation-content) nav a.active {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
   color: var(--accent);
 }
@@ -366,7 +366,7 @@ small,
 }
 .two-col {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 22px;
 }
 .state {
@@ -784,7 +784,7 @@ td span[title] {
     padding: 0 24px;
   }
   .metrics {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .login-story {
     padding: 35px;
@@ -796,48 +796,185 @@ td span[title] {
     grid-template-columns: 1fr;
   }
 }
+/* The navigation uses a native modal dialog on phones for focus and Escape handling. */
+.menu-toggle,
+.mobile-navigation {
+  display: none;
+}
+.workspace-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.sidebar {
+  overflow-y: auto;
+}
+.actions,
+.form-actions {
+  flex-wrap: wrap;
+}
+.panel-heading {
+  flex-wrap: wrap;
+}
+.panel,
+.metric,
+.page-heading > div,
+.chart-controls > div,
+.form-grid > *,
+.two-col > * {
+  min-width: 0;
+}
+.metric strong,
+h1,
+.notice,
+.user-row > span {
+  overflow-wrap: anywhere;
+}
+.chart-canvas {
+  width: 100%;
+  height: var(--chart-height);
+}
+.chart-series-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 8px 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+.chart-series-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.chart-series-legend i {
+  width: 12px;
+  height: 3px;
+  flex-shrink: 0;
+}
+.chart-tooltip {
+  min-width: 0;
+  max-width: min(230px, calc(100% - 16px));
+  max-height: calc(100% - 16px);
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.table-wrap {
+  max-width: 100%;
+  overscroll-behavior-x: contain;
+}
+@media (max-width: 1100px) {
+  .transaction-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
 @media (max-width: 760px) {
-  .sidebar {
-    width: 65px;
-    padding: 20px 8px 0;
-  }
-  .sidebar .brand {
-    font-size: 0;
-    gap: 0;
-    justify-content: center;
-  }
-  .nav-caption,
-  .sidebar-bottom,
-  .sidebar nav a {
-    font-size: 0;
-  }
-  .sidebar nav {
-    margin-top: 35px;
-  }
-  .sidebar nav a {
-    padding: 12px;
-    gap: 0;
+  .sidebar,
+  .workspace-label,
+  .workspace-status {
+    display: none;
   }
   .main-wrap {
-    margin-left: 65px;
+    margin-left: 0;
+  }
+  .menu-toggle {
+    display: inline-flex;
+    padding: 8px;
+    background: transparent;
+    border: 0;
+    font-size: 16px;
+  }
+  .menu-toggle svg {
+    flex-shrink: 0;
+  }
+  .mobile-navigation[open] {
+    display: block;
+  }
+  .mobile-navigation {
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: min(320px, calc(100% - 40px));
+    height: 100dvh;
+    max-width: none;
+    max-height: none;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-right: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+  }
+  .mobile-navigation::backdrop {
+    background: #0009;
+  }
+  .mobile-navigation-content {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
+    padding: max(24px, env(safe-area-inset-top)) 18px
+      max(12px, env(safe-area-inset-bottom));
+  }
+  .menu-close {
+    position: absolute;
+    top: max(18px, env(safe-area-inset-top));
+    right: 12px;
+    padding: 10px;
+  }
+  .mobile-navigation .brand {
+    font-size: 21px;
+  }
+  .mobile-navigation .nav-caption {
+    margin: 30px 13px 14px;
+  }
+  body:has(.mobile-navigation[open]) {
+    overflow: hidden;
   }
   .content {
-    padding: 22px 16px;
+    padding: 24px 16px;
   }
   .topbar {
-    padding: 0 16px;
-    font-size: 10px;
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    height: 64px;
+    padding: 0 12px;
+    background: var(--bg);
+  }
+  button,
+  .sidebar nav a,
+  .mobile-navigation nav a {
+    min-height: 44px;
+  }
+  .currency-toggle button {
+    min-height: 36px;
+    min-width: 44px;
+    font-size: 12px;
+  }
+  input,
+  select,
+  textarea {
+    font-size: 16px;
   }
   .two-col {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     gap: 0;
   }
   .page-heading {
     align-items: flex-start;
     flex-direction: column;
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .page-heading .actions {
+    width: 100%;
   }
   h1 {
-    font-size: 24px;
+    font-size: 25px;
+    line-height: 1.2;
+  }
+  .metrics {
+    gap: 12px;
   }
   .metric {
     padding: 16px;
@@ -845,8 +982,53 @@ td span[title] {
   .metric strong {
     font-size: 22px;
   }
+  .panel {
+    padding: 16px;
+  }
+  .portfolio-chart-grid {
+    gap: 16px;
+  }
+  .portfolio-chart-grid > div {
+    padding: 12px;
+  }
+  .chart-canvas {
+    height: min(var(--chart-height), 300px);
+  }
+  .chart-axis-legend {
+    gap: 4px 12px;
+    padding: 8px;
+  }
+  .chart-controls {
+    gap: 12px;
+  }
+  .chart-controls > div {
+    width: 100%;
+  }
+  .chart-controls .tabs {
+    gap: 4px;
+    margin-bottom: 0;
+  }
+  .chart-controls .tabs button {
+    flex: 1 0 auto;
+    padding: 8px 10px;
+  }
+  .toolbar {
+    gap: 4px 12px;
+  }
+  .toolbar label {
+    min-height: 44px;
+  }
   .form-grid {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .search-box {
+    align-items: stretch;
+  }
+  .search-box > svg {
+    display: none;
+  }
+  .search-box input {
+    min-width: 0;
   }
   .login-layout {
     grid-template-columns: 1fr;
@@ -855,16 +1037,34 @@ td span[title] {
     display: none;
   }
   .login-panel {
-    min-height: 100vh;
-    padding: 30px;
+    min-height: 100dvh;
+    padding: 30px 24px 100px;
+  }
+  .disclaimer {
+    left: 24px;
+    right: 24px;
   }
   footer {
-    padding: 20px;
-    font-size: 9px;
+    padding: 16px 16px max(24px, env(safe-area-inset-bottom));
+    font-size: 10px;
   }
 }
 @media (max-width: 520px) {
-  .transaction-filters {
-    grid-template-columns: 1fr;
+  .metric-wide {
+    grid-column: 1 / -1;
+  }
+  .form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .range-control {
+    width: 100%;
+  }
+  .metric strong {
+    font-size: 20px;
+  }
+}
+@media (max-width: 380px) {
+  .metrics {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

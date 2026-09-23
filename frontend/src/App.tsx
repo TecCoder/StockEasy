@@ -1,15 +1,23 @@
-import { useEffect, useState } from "react";
-import { BrowserRouter, NavLink, Route, Routes } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import {
+  BrowserRouter,
+  NavLink,
+  Route,
+  Routes,
+  useLocation,
+} from "react-router-dom";
 import {
   Activity,
   Bitcoin,
   LayoutDashboard,
+  Menu,
   Power,
   Search,
   Settings as SettingsIcon,
   ShieldCheck,
   Star,
   Wallet,
+  X,
 } from "lucide-react";
 import { api } from "./api/client";
 import { AuthProvider, useAuth } from "./hooks/useAuth";
@@ -28,6 +36,20 @@ function Workspace() {
   const { user, loading, shutdown } = useAuth();
   const [error, setError] = useState("");
   const [closing, setClosing] = useState(false);
+  const menu = useRef<HTMLDialogElement>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const location = useLocation();
+  useEffect(() => {
+    menu.current?.close();
+  }, [location]);
+  useEffect(() => {
+    const desktop = window.matchMedia("(min-width: 761px)");
+    const closeOnDesktop = () => {
+      if (desktop.matches) menu.current?.close();
+    };
+    desktop.addEventListener("change", closeOnDesktop);
+    return () => desktop.removeEventListener("change", closeOnDesktop);
+  }, []);
   const [displayCurrency, setDisplayCurrency] = useState<DisplayCurrency>(() =>
     localStorage.getItem("stockeasy-display-currency") === "USD"
       ? "USD"
@@ -68,55 +90,98 @@ function Workspace() {
       setClosing(false);
     }
   }
+  const navigation = (
+    <>
+      <NavLink to="/" className="brand" onClick={() => menu.current?.close()}>
+        <span className="brand-icon">▥</span>StockEasy
+      </NavLink>
+      <p className="nav-caption">INVESTMENT WORKSPACE</p>
+      <nav aria-label="Navegación principal">
+        {links.map(({ to, icon: Icon, label }) => (
+          <NavLink
+            key={to}
+            to={to}
+            end={to === "/"}
+            onClick={() => menu.current?.close()}
+          >
+            <Icon size={18} />
+            {label}
+          </NavLink>
+        ))}
+      </nav>
+      <div className="sidebar-bottom">
+        <div className="local-status">
+          <ShieldCheck size={17} />
+          <div>
+            Almacenamiento local<small>Tus datos, en tu equipo</small>
+          </div>
+        </div>
+        <div className="user-row">
+          <span className="avatar">{user.username[0].toUpperCase()}</span>
+          <span>
+            {user.username}
+            <small>Cuenta personal</small>
+          </span>
+          <button
+            className="exit-button"
+            title="Cerrar sesión y apagar StockEasy"
+            disabled={closing}
+            onClick={closeApplication}
+          >
+            <Power size={16} />
+            {closing ? "Cerrando…" : "Salir"}
+          </button>
+        </div>
+        {error && <p role="alert">{error}</p>}
+      </div>
+    </>
+  );
   return (
     <div className="app-shell">
-      <aside className="sidebar">
-        <NavLink to="/" className="brand">
-          <span className="brand-icon">▥</span>StockEasy
-        </NavLink>
-        <p className="nav-caption">INVESTMENT WORKSPACE</p>
-        <nav>
-          {links.map(({ to, icon: Icon, label }) => (
-            <NavLink key={to} to={to} end={to === "/"}>
-              <Icon size={18} />
-              {label}
-            </NavLink>
-          ))}
-        </nav>
-        <div className="sidebar-bottom">
-          <div className="local-status">
-            <ShieldCheck size={17} />
-            <div>
-              Almacenamiento local<small>Tus datos, en tu equipo</small>
-            </div>
-          </div>
-          <div className="user-row">
-            <span className="avatar">{user.username[0].toUpperCase()}</span>
-            <span>
-              {user.username}
-              <small>Cuenta personal</small>
-            </span>
-            <button
-              className="exit-button"
-              title="Cerrar sesión y apagar StockEasy"
-              disabled={closing}
-              onClick={closeApplication}
-            >
-              <Power size={16} />
-              {closing ? "Cerrando…" : "Salir"}
-            </button>
-          </div>
-          {error && <p role="alert">{error}</p>}
+      <aside className="sidebar">{navigation}</aside>
+      <dialog
+        ref={menu}
+        id="mobile-navigation"
+        className="mobile-navigation"
+        aria-label="Menú principal"
+        onClose={() => setMenuOpen(false)}
+        onClick={(event) => {
+          if (event.target === event.currentTarget) menu.current?.close();
+        }}
+      >
+        <div className="mobile-navigation-content">
+          <button
+            className="menu-close"
+            aria-label="Cerrar menú"
+            onClick={() => menu.current?.close()}
+          >
+            <X size={20} />
+          </button>
+          {navigation}
         </div>
-      </aside>
+      </dialog>
       <div className="main-wrap">
         <header className="topbar">
-          <span>
+          <button
+            className="menu-toggle"
+            aria-label="Abrir menú"
+            aria-controls="mobile-navigation"
+            aria-expanded={menuOpen}
+            onClick={() => {
+              menu.current?.showModal();
+              setMenuOpen(true);
+            }}
+          >
+            <Menu size={20} />
+            <span>StockEasy</span>
+          </button>
+          <span className="workspace-label">
             Workspace <span className="muted">/ Personal</span>
           </span>
           <div>
-            <span className="status-dot" />
-            Local · EOD{" "}
+            <span className="workspace-status">
+              <span className="status-dot" /> Local · EOD
+            </span>
             <div
               className="currency-toggle"
               aria-label="Moneda de visualización"

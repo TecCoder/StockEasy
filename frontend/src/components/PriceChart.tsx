@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type CSSProperties } from "react";
 import {
   CandlestickSeries,
   ColorType,
@@ -17,6 +17,7 @@ export type Series = {
   points: { time: string; value: number }[];
 };
 export type ChartValueFormat = "price" | "compact" | "percent" | "number";
+const EMPTY_OVERLAYS: Series[] = [];
 
 function chartValue(
   value: number,
@@ -102,7 +103,7 @@ type Props = {
 
 export function PriceChart({
   prices,
-  overlays = [],
+  overlays = EMPTY_OVERLAYS,
   height = 380,
   axisLabel = "Valor",
   seriesLabel = "Precio",
@@ -114,7 +115,10 @@ export function PriceChart({
   useEffect(() => {
     if (!container.current) return;
     const light = document.documentElement.dataset.theme === "light";
-    const formatter = (value: number) => chartValue(value, valueFormat, unit);
+    const element = container.current;
+    let compact = element.clientWidth < 500;
+    const formatter = (value: number) =>
+      chartValue(value, valueFormat, compact ? "" : unit);
     const priceFormat = {
       type: "custom" as const,
       formatter,
@@ -122,19 +126,23 @@ export function PriceChart({
     };
     const chart = createChart(container.current, {
       autoSize: true,
-      height,
       layout: {
         background: { type: ColorType.Solid, color: "transparent" },
         textColor: light ? "#647184" : "#8e98aa",
         fontFamily: "Segoe UI",
+        fontSize: compact ? 11 : 12,
         attributionLogo: true,
       },
       grid: {
         vertLines: { color: light ? "#edf1f5" : "#202733" },
         horzLines: { color: light ? "#edf1f5" : "#202733" },
       },
-      rightPriceScale: { borderVisible: false, minimumWidth: 96 },
-      timeScale: { borderVisible: false },
+      rightPriceScale: {
+        borderVisible: false,
+        minimumWidth: compact ? 64 : 96,
+      },
+      timeScale: { borderVisible: false, minBarSpacing: 0.001 },
+      handleScroll: { vertTouchDrag: false },
       crosshair: { mode: 0 },
     });
     const tooltipSeries: { series: ISeriesApi<SeriesType>; name: string }[] =
@@ -143,7 +151,7 @@ export function PriceChart({
       prices.every((p) => p.open != null && p.high != null && p.low != null)
     ) {
       const candles = chart.addSeries(CandlestickSeries, {
-        title: seriesLabel,
+        title: compact ? "" : seriesLabel,
         priceFormat,
         upColor: "#b5ef76",
         downColor: "#f78e99",
@@ -166,7 +174,7 @@ export function PriceChart({
       );
     } else {
       const line = chart.addSeries(LineSeries, {
-        title: seriesLabel,
+        title: compact ? "" : seriesLabel,
         priceFormat,
         color: "#b5ef76",
         lineWidth: 2,
@@ -203,7 +211,7 @@ export function PriceChart({
       const series = chart.addSeries(LineSeries, {
         color: overlay.color,
         lineWidth: 1,
-        title: overlay.name,
+        title: compact ? "" : overlay.name,
         priceLineVisible: false,
         priceFormat,
       });
@@ -242,16 +250,32 @@ export function PriceChart({
         "\n",
       );
       tooltip.current.hidden = false;
-      const tooltipWidth = 230;
+      const tooltipWidth = tooltip.current.offsetWidth;
       const left =
         param.point.x > container.current.clientWidth - tooltipWidth
           ? param.point.x - tooltipWidth - 12
           : param.point.x + 12;
-      tooltip.current.style.left = `${Math.max(8, left)}px`;
-      tooltip.current.style.top = `${Math.max(8, param.point.y - 36)}px`;
+      tooltip.current.style.left = `${Math.max(8, Math.min(left, container.current.clientWidth - tooltipWidth - 8))}px`;
+      tooltip.current.style.top = `${Math.max(8, Math.min(param.point.y - 36, container.current.clientHeight - tooltip.current.offsetHeight - 8))}px`;
     });
     chart.timeScale().fitContent();
-    return () => chart.remove();
+    const observer = new ResizeObserver(() => {
+      const nextCompact = element.clientWidth < 500;
+      if (nextCompact === compact) return;
+      compact = nextCompact;
+      chart.applyOptions({
+        layout: { fontSize: compact ? 11 : 12 },
+        rightPriceScale: { minimumWidth: compact ? 64 : 96 },
+      });
+      tooltipSeries.forEach(({ series, name }) => {
+        series.applyOptions({ title: compact ? "" : name, priceFormat });
+      });
+    });
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+      chart.remove();
+    };
   }, [prices, overlays, height, seriesLabel, unit, valueFormat]);
 
   const scaleHint = valueFormat === "compact" ? " · mil, M, B y T" : "";
@@ -269,8 +293,24 @@ export function PriceChart({
           <strong>Eje X</strong> · Fecha
         </span>
       </div>
+      <div className="chart-series-legend" aria-label="Series de la gráfica">
+        <span>
+          <i style={{ background: "#b5ef76" }} />
+          {seriesLabel}
+        </span>
+        {overlays.map((overlay) => (
+          <span key={overlay.name}>
+            <i style={{ background: overlay.color }} />
+            {overlay.name}
+          </span>
+        ))}
+      </div>
       <div className="chart-plot">
-        <div ref={container} style={{ height, width: "100%" }} />
+        <div
+          ref={container}
+          className="chart-canvas"
+          style={{ "--chart-height": `${height}px` } as CSSProperties}
+        />
         <div ref={tooltip} className="chart-tooltip" hidden />
       </div>
     </div>
